@@ -11,18 +11,18 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+/* ======================================================
+   ROOT
+====================================================== */
 app.get('/', (req, res) => {
   res.json({ message: 'Contabilidad Master API funcionando' });
 });
 
+/* ======================================================
+   LOGIN MASTER
+====================================================== */
 app.post('/auth/login', async (req, res) => {
   try {
-    console.log('--- LOGIN ---');
-    console.log('ENV DB_HOST:', process.env.DB_HOST);
-    console.log('ENV DB_USER:', process.env.DB_USER);
-    console.log('ENV DB_NAME:', process.env.DB_NAME);
-    console.log('BODY:', req.body);
-
     const { email, password } = req.body || {};
 
     if (!email || !password) {
@@ -34,26 +34,17 @@ app.post('/auth/login', async (req, res) => {
       [email]
     );
 
-    console.log('rows.length =', rows?.length);
-
     if (!rows || rows.length === 0) {
       return res.status(401).json({ message: 'Credenciales inválidas' });
     }
 
     const user = rows[0];
 
-    const dbHash = String(user.password_hash ?? '').trim();
-    const pass = String(password);
-
-    console.log('DB hash len =', dbHash.length);
-    console.log('DB hash =', dbHash);
-
     if (!user.is_active) {
       return res.status(403).json({ message: 'Usuario inactivo' });
     }
 
-    const ok = bcrypt.compareSync(pass, dbHash);
-    console.log('bcrypt ok =', ok);
+    const ok = bcrypt.compareSync(password, String(user.password_hash).trim());
 
     if (!ok) {
       return res.status(401).json({ message: 'Credenciales inválidas' });
@@ -80,6 +71,67 @@ app.post('/auth/login', async (req, res) => {
   }
 });
 
+/* ======================================================
+   MIDDLEWARE JWT
+====================================================== */
+function verifyToken(req, res, next) {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader) {
+    return res.status(401).json({ message: 'Token requerido' });
+  }
+
+  const token = authHeader.split(' ')[1];
+
+  try {
+    const decoded = jwt.verify(
+      token,
+      process.env.JWT_SECRET || 'solusoft_secret'
+    );
+
+    req.user = decoded;
+    next();
+
+  } catch (err) {
+    return res.status(401).json({ message: 'Token inválido' });
+  }
+}
+
+/* ======================================================
+   CREAR OFICINA (solo MASTER)
+====================================================== */
+app.post('/offices', verifyToken, async (req, res) => {
+  try {
+
+    if (req.user.role !== 'MASTER') {
+      return res.status(403).json({ message: 'No autorizado' });
+    }
+
+    const { name } = req.body;
+
+    if (!name) {
+      return res.status(400).json({ message: 'Nombre de oficina requerido' });
+    }
+
+    const [result] = await pool.query(
+      'INSERT INTO offices (name) VALUES (?)',
+      [name]
+    );
+
+    res.status(201).json({
+      message: 'Oficina creada',
+      officeId: result.insertId
+    });
+
+  } catch (err) {
+    console.error('CREATE OFFICE ERROR:', err);
+    res.status(500).json({ message: 'Error interno' });
+  }
+});
+
+/* ======================================================
+   SERVER
+====================================================== */
 const PORT = process.env.PORT || 4000;
 
 app.listen(PORT, () => {
