@@ -45,7 +45,6 @@ app.post('/auth/login', async (req, res) => {
     }
 
     const ok = bcrypt.compareSync(password, String(user.password_hash).trim());
-
     if (!ok) {
       return res.status(401).json({ message: 'Credenciales inválidas' });
     }
@@ -64,7 +63,6 @@ app.post('/auth/login', async (req, res) => {
         role: 'MASTER'
       }
     });
-
   } catch (err) {
     console.error('LOGIN ERROR:', err);
     return res.status(500).json({ message: 'Error interno del servidor' });
@@ -81,59 +79,40 @@ function verifyToken(req, res, next) {
     return res.status(401).json({ message: 'Token requerido' });
   }
 
-  const token = authHeader.split(' ')[1];
+  const token = authHeader.startsWith('Bearer ')
+    ? authHeader.slice(7)
+    : authHeader.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({ message: 'Token requerido' });
+  }
 
   try {
-    const decoded = jwt.verify(
-      token,
-      process.env.JWT_SECRET || 'solusoft_secret'
-    );
-
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'solusoft_secret');
     req.user = decoded;
     next();
-
   } catch (err) {
     return res.status(401).json({ message: 'Token inválido' });
   }
 }
 
-/* ======================================================
-   CREAR OFICINA (solo MASTER)
-====================================================== */
-app.post('/offices', verifyToken, async (req, res) => {
-  try {
-
-    if (req.user.role !== 'MASTER') {
-      return res.status(403).json({ message: 'No autorizado' });
-    }
-
-    const { name } = req.body;
-
-    if (!name) {
-      return res.status(400).json({ message: 'Nombre de oficina requerido' });
-    }
-
-    const [result] = await pool.query(
-      'INSERT INTO offices (name) VALUES (?)',
-      [name]
-    );
-
-    res.status(201).json({
-      message: 'Oficina creada',
-      officeId: result.insertId
-    });
-
-  } catch (err) {
-    console.error('CREATE OFFICE ERROR:', err);
-    res.status(500).json({ message: 'Error interno' });
+function requireMaster(req, res, next) {
+  if (!req.user || req.user.role !== 'MASTER') {
+    return res.status(403).json({ message: 'No autorizado' });
   }
-});
+  next();
+}
+
+/* ======================================================
+   ROUTES: OFFICES
+====================================================== */
+const officesRoutesFactory = require('./routes/offices.routes');
+app.use('/offices', verifyToken, requireMaster, officesRoutesFactory(pool));
 
 /* ======================================================
    SERVER
 ====================================================== */
 const PORT = process.env.PORT || 4000;
-
 app.listen(PORT, () => {
   console.log(`Master API corriendo en puerto ${PORT}`);
 });
