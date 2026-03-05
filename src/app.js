@@ -19,7 +19,9 @@ app.get('/', (req, res) => {
 });
 
 /* ======================================================
-   LOGIN MASTER
+   LOGIN MASTER (ÚNICO)
+   POST /auth/login
+   Body: { email, password }
 ====================================================== */
 app.post('/auth/login', async (req, res) => {
   try {
@@ -40,11 +42,12 @@ app.post('/auth/login', async (req, res) => {
 
     const user = rows[0];
 
-    if (!user.is_active) {
+    // OJO: en MySQL, is_active puede venir como 0/1, '0'/'1', etc.
+    if (!Number(user.is_active)) {
       return res.status(403).json({ message: 'Usuario inactivo' });
     }
 
-    const ok = bcrypt.compareSync(password, String(user.password_hash).trim());
+    const ok = bcrypt.compareSync(password, String(user.password_hash || '').trim());
     if (!ok) {
       return res.status(401).json({ message: 'Credenciales inválidas' });
     }
@@ -60,8 +63,8 @@ app.post('/auth/login', async (req, res) => {
       user: {
         id: user.id,
         email: user.email,
-        role: 'MASTER'
-      }
+        role: 'MASTER',
+      },
     });
   } catch (err) {
     console.error('LOGIN ERROR:', err);
@@ -90,7 +93,7 @@ function verifyToken(req, res, next) {
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'solusoft_secret');
     req.user = decoded;
-    next();
+    return next();
   } catch (err) {
     return res.status(401).json({ message: 'Token inválido' });
   }
@@ -100,11 +103,11 @@ function requireMaster(req, res, next) {
   if (!req.user || req.user.role !== 'MASTER') {
     return res.status(403).json({ message: 'No autorizado' });
   }
-  next();
+  return next();
 }
 
 /* ======================================================
-   ROUTES: OFFICES
+   ROUTES: OFFICES (PROTEGIDO)
 ====================================================== */
 const officesRoutesFactory = require('./routes/offices.routes');
 app.use('/offices', verifyToken, requireMaster, officesRoutesFactory(pool));
@@ -112,7 +115,8 @@ app.use('/offices', verifyToken, requireMaster, officesRoutesFactory(pool));
 /* ======================================================
    SERVER
 ====================================================== */
-const PORT = process.env.PORT || 4000;
+const PORT = Number(process.env.PORT) || 3000;
+
 app.listen(PORT, () => {
   console.log(`Master API corriendo en puerto ${PORT}`);
 });
