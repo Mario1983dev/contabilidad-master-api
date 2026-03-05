@@ -9,7 +9,7 @@ USE contabilidad_master;
 INSERT IGNORE INTO master_users (email, password_hash, is_active)
 VALUES (
   'master@solusoft.cl',
-  '$2b$10$7EqJtq98hPqEX7fNZaFWoOHi3QqSdz8CA0nVddOZXS6jttuPAoBsK',
+  '$2b$10$8j3RMdRFEk6usKtzS08s9OI.6.DoaHBcLhRzsqmMAFg8be.ScI9Aa',
   TRUE
 );
 
