@@ -6,10 +6,10 @@
 
 USE contabilidad_master;
 
-INSERT INTO master_users (email, password_hash, is_active)
+INSERT IGNORE INTO master_users (email, password_hash, is_active)
 VALUES (
   'master@solusoft.cl',
-  '$2b$10$khqisgGaqObeuyosqPcIOXLxtjj2tBeQSVOk0FeYKwzJi4jTpoYi',
+  '$2b$10$7EqJtq98hPqEX7fNZaFWoOHi3QqSdz8CA0nVddOZXS6jttuPAoBsK',
   TRUE
 );
 
