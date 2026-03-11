@@ -7,7 +7,7 @@ const jwt = require('jsonwebtoken');
 const officeUsersRoutes = require('./routes/office-users.routes');
 const pool = require('./db');
 const officesRoutesFactory = require('./routes/offices.routes');
-
+const companiesRoutes = require('./routes/companies.routes');
 const app = express();
 
 app.use(cors());
@@ -15,6 +15,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use('/office-users', officeUsersRoutes(pool));
 app.use('/offices', officesRoutesFactory(pool));
+app.use('/companies', companiesRoutes(pool));
 /* ======================================================
    ROOT
 ====================================================== */
