@@ -4,7 +4,7 @@ const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-
+const officeUsersRoutes = require('./routes/office-users.routes');
 const pool = require('./db');
 const officesRoutesFactory = require('./routes/offices.routes');
 
@@ -13,7 +13,8 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
+app.use('/office-users', officeUsersRoutes(pool));
+app.use('/offices', officesRoutesFactory(pool));
 /* ======================================================
    ROOT
 ====================================================== */
