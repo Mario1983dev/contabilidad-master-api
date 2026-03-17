@@ -87,7 +87,7 @@ module.exports = (pool) => {
       const [exists] = await pool.query(
         `SELECT id
          FROM office_users
-         WHERE email = ?
+         WHERE username = ?
          LIMIT 1`,
         [email]
       );

@@ -8,14 +8,17 @@ const officeUsersRoutes = require('./routes/office-users.routes');
 const pool = require('./db');
 const officesRoutesFactory = require('./routes/offices.routes');
 const companiesRoutes = require('./routes/companies.routes');
+
 const app = express();
 
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
 app.use('/office-users', officeUsersRoutes(pool));
 app.use('/offices', officesRoutesFactory(pool));
 app.use('/companies', companiesRoutes(pool));
+
 /* ======================================================
    ROOT
 ====================================================== */
@@ -26,15 +29,16 @@ app.get('/', (req, res) => {
 /* ======================================================
    LOGIN GENERAL
    POST /api/login
+   Acepta username, email o usernameOrEmail
    Orden:
    1) master_users
    2) office_admins
+   3) office_users
 ====================================================== */
 app.post('/api/login', async (req, res) => {
   try {
-    const { email, username, password } = req.body || {};
-
-    const loginValue = String(email || username || '').trim();
+    const { email, username, usernameOrEmail, password } = req.body || {};
+    const loginValue = String(usernameOrEmail || username || email || '').trim();
 
     if (!loginValue || !password) {
       return res.status(400).json({
@@ -44,16 +48,31 @@ app.post('/api/login', async (req, res) => {
 
     /* ======================================================
        1) BUSCAR EN MASTER_USERS
+       Importante: soporta tablas master_users con o sin username
     ====================================================== */
-    const [masterRows] = await pool.query(
-      `SELECT id, email, password_hash, is_active
-       FROM master_users
-       WHERE email = ?
-       LIMIT 1`,
-      [loginValue]
-    );
+    let masterRows = [];
 
-    if (masterRows && masterRows.length > 0) {
+    try {
+      const [rows] = await pool.query(
+        `SELECT id, username, email, password_hash, is_active
+         FROM master_users
+         WHERE username = ? OR email = ?
+         LIMIT 1`,
+        [loginValue, loginValue]
+      );
+      masterRows = rows;
+    } catch (error) {
+      const [rows] = await pool.query(
+        `SELECT id, email, password_hash, is_active
+         FROM master_users
+         WHERE email = ?
+         LIMIT 1`,
+        [loginValue]
+      );
+      masterRows = rows;
+    }
+
+    if (masterRows.length > 0) {
       const masterUser = masterRows[0];
 
       if (!Number(masterUser.is_active)) {
@@ -76,6 +95,7 @@ app.post('/api/login', async (req, res) => {
       const token = jwt.sign(
         {
           id: masterUser.id,
+          username: masterUser.username || null,
           email: masterUser.email,
           role: 'MASTER',
           scope: 'master'
@@ -90,6 +110,7 @@ app.post('/api/login', async (req, res) => {
         token,
         user: {
           id: masterUser.id,
+          username: masterUser.username || null,
           email: masterUser.email,
           role: 'MASTER',
           scope: 'master'
@@ -101,14 +122,14 @@ app.post('/api/login', async (req, res) => {
        2) BUSCAR EN OFFICE_ADMINS
     ====================================================== */
     const [officeAdminRows] = await pool.query(
-      `SELECT id, office_id, email, password_hash, is_active
+      `SELECT id, office_id, username, email, password_hash, is_active
        FROM office_admins
-       WHERE email = ?
+       WHERE username = ? OR email = ?
        LIMIT 1`,
-      [loginValue]
+      [loginValue, loginValue]
     );
 
-    if (officeAdminRows && officeAdminRows.length > 0) {
+    if (officeAdminRows.length > 0) {
       const officeAdmin = officeAdminRows[0];
 
       if (!Number(officeAdmin.is_active)) {
@@ -132,6 +153,7 @@ app.post('/api/login', async (req, res) => {
         {
           id: officeAdmin.id,
           office_id: officeAdmin.office_id,
+          username: officeAdmin.username || null,
           email: officeAdmin.email,
           role: 'OFFICE_ADMIN',
           scope: 'office_admin'
@@ -147,6 +169,7 @@ app.post('/api/login', async (req, res) => {
         user: {
           id: officeAdmin.id,
           office_id: officeAdmin.office_id,
+          username: officeAdmin.username || null,
           email: officeAdmin.email,
           role: 'OFFICE_ADMIN',
           scope: 'office_admin'
@@ -155,8 +178,65 @@ app.post('/api/login', async (req, res) => {
     }
 
     /* ======================================================
-       NO ENCONTRADO
+       3) BUSCAR EN OFFICE_USERS
     ====================================================== */
+    const [officeUserRows] = await pool.query(
+      `SELECT id, office_id, username, name, email, password_hash, is_active
+       FROM office_users
+       WHERE username = ? OR email = ?
+       LIMIT 1`,
+      [loginValue, loginValue]
+    );
+
+    if (officeUserRows.length > 0) {
+      const officeUser = officeUserRows[0];
+
+      if (!Number(officeUser.is_active)) {
+        return res.status(403).json({
+          message: 'Usuario inactivo'
+        });
+      }
+
+      const okOfficeUser = bcrypt.compareSync(
+        password,
+        String(officeUser.password_hash || '').trim()
+      );
+
+      if (!okOfficeUser) {
+        return res.status(401).json({
+          message: 'Credenciales inválidas'
+        });
+      }
+
+      const token = jwt.sign(
+        {
+          id: officeUser.id,
+          office_id: officeUser.office_id,
+          username: officeUser.username,
+          email: officeUser.email,
+          role: 'OFFICE_USER',
+          scope: 'office_user'
+        },
+        process.env.JWT_SECRET || 'solusoft_secret',
+        {
+          expiresIn: process.env.JWT_EXPIRES_IN || '8h'
+        }
+      );
+
+      return res.json({
+        token,
+        user: {
+          id: officeUser.id,
+          office_id: officeUser.office_id,
+          username: officeUser.username,
+          name: officeUser.name,
+          email: officeUser.email,
+          role: 'OFFICE_USER',
+          scope: 'office_user'
+        }
+      });
+    }
+
     return res.status(401).json({
       message: 'Credenciales inválidas'
     });
@@ -174,21 +254,36 @@ app.post('/api/login', async (req, res) => {
 ====================================================== */
 app.post('/api/master/login', async (req, res) => {
   try {
-    const { email, password } = req.body || {};
+    const { email, username, usernameOrEmail, password } = req.body || {};
+    const loginValue = String(usernameOrEmail || username || email || '').trim();
 
-    if (!email || !password) {
+    if (!loginValue || !password) {
       return res.status(400).json({
-        message: 'Email y password son obligatorios'
+        message: 'Email/usuario y password son obligatorios'
       });
     }
 
-    const [rows] = await pool.query(
-      `SELECT id, email, password_hash, is_active
-       FROM master_users
-       WHERE email = ?
-       LIMIT 1`,
-      [email]
-    );
+    let rows = [];
+
+    try {
+      const [result] = await pool.query(
+        `SELECT id, username, email, password_hash, is_active
+         FROM master_users
+         WHERE username = ? OR email = ?
+         LIMIT 1`,
+        [loginValue, loginValue]
+      );
+      rows = result;
+    } catch (error) {
+      const [result] = await pool.query(
+        `SELECT id, email, password_hash, is_active
+         FROM master_users
+         WHERE email = ?
+         LIMIT 1`,
+        [loginValue]
+      );
+      rows = result;
+    }
 
     if (!rows || rows.length === 0) {
       return res.status(401).json({
@@ -218,6 +313,7 @@ app.post('/api/master/login', async (req, res) => {
     const token = jwt.sign(
       {
         id: user.id,
+        username: user.username || null,
         email: user.email,
         role: 'MASTER',
         scope: 'master'
@@ -232,6 +328,7 @@ app.post('/api/master/login', async (req, res) => {
       token,
       user: {
         id: user.id,
+        username: user.username || null,
         email: user.email,
         role: 'MASTER',
         scope: 'master'
