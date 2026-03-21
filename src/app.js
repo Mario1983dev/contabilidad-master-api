@@ -179,9 +179,10 @@ app.post('/api/login', async (req, res) => {
 
     /* ======================================================
        3) BUSCAR EN OFFICE_USERS
+       OJO: office_users no tiene is_active
     ====================================================== */
     const [officeUserRows] = await pool.query(
-      `SELECT id, office_id, username, name, email, password_hash, is_active
+      `SELECT id, office_id, username, name, email, password_hash
        FROM office_users
        WHERE username = ? OR email = ?
        LIMIT 1`,
@@ -190,12 +191,6 @@ app.post('/api/login', async (req, res) => {
 
     if (officeUserRows.length > 0) {
       const officeUser = officeUserRows[0];
-
-      if (!Number(officeUser.is_active)) {
-        return res.status(403).json({
-          message: 'Usuario inactivo'
-        });
-      }
 
       const okOfficeUser = bcrypt.compareSync(
         password,

@@ -1,14 +1,63 @@
 const express = require('express');
+const jwt = require('jsonwebtoken');
 
 module.exports = (pool) => {
   const router = express.Router();
 
   /* ======================================================
-     LISTAR EMPRESAS (TODAS: ACTIVAS E INACTIVAS)
+     MIDDLEWARE JWT
   ====================================================== */
-  router.get('/', async (req, res) => {
+  function verifyToken(req, res, next) {
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader) {
+      return res.status(401).json({ message: 'Token requerido' });
+    }
+
+    const token = authHeader.startsWith('Bearer ')
+      ? authHeader.slice(7).trim()
+      : '';
+
+    if (!token) {
+      return res.status(401).json({ message: 'Token requerido' });
+    }
+
     try {
-      const [rows] = await pool.query(`
+      const decoded = jwt.verify(
+        token,
+        process.env.JWT_SECRET || 'solusoft_secret'
+      );
+
+      req.user = decoded;
+      next();
+    } catch (err) {
+      return res.status(401).json({ message: 'Token inválido' });
+    }
+  }
+
+  /* ======================================================
+     SOLO MASTER U OFFICE_ADMIN
+  ====================================================== */
+  function requireAdmin(req, res, next) {
+    if (!req.user || !req.user.role) {
+      return res.status(403).json({ message: 'Acceso denegado' });
+    }
+
+    if (req.user.role !== 'MASTER' && req.user.role !== 'OFFICE_ADMIN') {
+      return res.status(403).json({ message: 'Acceso denegado' });
+    }
+
+    next();
+  }
+
+  /* ======================================================
+     LISTAR EMPRESAS
+     - MASTER: puede ver todas o filtrar por office_id
+     - OFFICE_ADMIN: solo ve las de su oficina
+  ====================================================== */
+  router.get('/', verifyToken, requireAdmin, async (req, res) => {
+    try {
+      let sql = `
         SELECT
           c.id,
           c.office_id,
@@ -33,9 +82,21 @@ module.exports = (pool) => {
         LEFT JOIN accounting_periods p
           ON p.company_id = c.id
          AND p.is_current = 1
-        ORDER BY c.id DESC
-      `);
+      `;
 
+      const params = [];
+
+      if (req.user.role === 'OFFICE_ADMIN') {
+        sql += ` WHERE c.office_id = ? `;
+        params.push(req.user.office_id);
+      } else if (req.query.office_id) {
+        sql += ` WHERE c.office_id = ? `;
+        params.push(Number(req.query.office_id));
+      }
+
+      sql += ` ORDER BY c.id DESC `;
+
+      const [rows] = await pool.query(sql, params);
       res.json(rows);
     } catch (err) {
       console.error('LIST COMPANIES ERROR:', err);
@@ -46,11 +107,12 @@ module.exports = (pool) => {
   /* ======================================================
      OBTENER EMPRESA POR ID
   ====================================================== */
-  router.get('/:id', async (req, res) => {
+  router.get('/:id', verifyToken, requireAdmin, async (req, res) => {
     try {
       const { id } = req.params;
 
-      const [rows] = await pool.query(`
+      const [rows] = await pool.query(
+        `
         SELECT
           c.id,
           c.office_id,
@@ -74,13 +136,24 @@ module.exports = (pool) => {
           ON p.company_id = c.id
          AND p.is_current = 1
         WHERE c.id = ?
-      `, [id]);
+      `,
+        [id]
+      );
 
       if (rows.length === 0) {
         return res.status(404).json({ message: 'Empresa no encontrada' });
       }
 
-      res.json(rows[0]);
+      const company = rows[0];
+
+      if (
+        req.user.role === 'OFFICE_ADMIN' &&
+        Number(company.office_id) !== Number(req.user.office_id)
+      ) {
+        return res.status(403).json({ message: 'No puedes ver esta empresa' });
+      }
+
+      res.json(company);
     } catch (err) {
       console.error('GET COMPANY ERROR:', err);
       res.status(500).json({ message: 'Error interno al obtener empresa' });
@@ -89,8 +162,10 @@ module.exports = (pool) => {
 
   /* ======================================================
      CREAR EMPRESA
+     - MASTER: puede enviar office_id
+     - OFFICE_ADMIN: usa office_id del token
   ====================================================== */
-  router.post('/', async (req, res) => {
+  router.post('/', verifyToken, requireAdmin, async (req, res) => {
     const connection = await pool.getConnection();
 
     try {
@@ -111,21 +186,26 @@ module.exports = (pool) => {
         year_num
       } = req.body || {};
 
-      if (!office_id || !rut || !name) {
+      const finalOfficeId =
+        req.user.role === 'OFFICE_ADMIN'
+          ? req.user.office_id
+          : office_id;
+
+      if (!finalOfficeId || !rut || !name) {
         return res.status(400).json({
           message: 'office_id, rut y name son obligatorios'
         });
       }
 
       const accountingYear = Number(year_num) || new Date().getFullYear();
-      const start_date = `${accountingYear}-01-01`;
-      const end_date = `${accountingYear}-12-31`;
+      const startDate = `${accountingYear}-01-01`;
+      const endDate = `${accountingYear}-12-31`;
 
       await connection.beginTransaction();
 
       const [officeRows] = await connection.query(
         `SELECT id FROM offices WHERE id = ?`,
-        [office_id]
+        [finalOfficeId]
       );
 
       if (officeRows.length === 0) {
@@ -135,7 +215,7 @@ module.exports = (pool) => {
 
       const [existingCompany] = await connection.query(
         `SELECT id FROM companies WHERE office_id = ? AND rut = ?`,
-        [office_id, rut]
+        [finalOfficeId, rut]
       );
 
       if (existingCompany.length > 0) {
@@ -145,7 +225,8 @@ module.exports = (pool) => {
         });
       }
 
-      const [companyResult] = await connection.query(`
+      const [companyResult] = await connection.query(
+        `
         INSERT INTO companies (
           office_id,
           rut,
@@ -163,25 +244,27 @@ module.exports = (pool) => {
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
-      [
-        office_id,
-        rut,
-        name,
-        legal_name || null,
-        business_type || null,
-        email || null,
-        phone || null,
-        address || null,
-        commune || null,
-        city || null,
-        region_name || null,
-        status || 'active',
-        notes || null
-      ]);
+        [
+          finalOfficeId,
+          rut,
+          name,
+          legal_name || null,
+          business_type || null,
+          email || null,
+          phone || null,
+          address || null,
+          commune || null,
+          city || null,
+          region_name || null,
+          status || 'active',
+          notes || null
+        ]
+      );
 
       const companyId = companyResult.insertId;
 
-      await connection.query(`
+      await connection.query(
+        `
         INSERT INTO accounting_periods (
           company_id,
           year_num,
@@ -193,15 +276,17 @@ module.exports = (pool) => {
         )
         VALUES (?, ?, ?, ?, 'OPEN', 1, ?)
       `,
-      [
-        companyId,
-        accountingYear,
-        start_date,
-        end_date,
-        `Periodo inicial creado automaticamente para la empresa ${name}`
-      ]);
+        [
+          companyId,
+          accountingYear,
+          startDate,
+          endDate,
+          `Periodo inicial creado automaticamente para la empresa ${name}`
+        ]
+      );
 
-      await connection.query(`
+      await connection.query(
+        `
         INSERT INTO company_accounts (
           company_id,
           code,
@@ -230,7 +315,8 @@ module.exports = (pool) => {
         FROM account_plan_base apb
         ORDER BY apb.sort_order, apb.code
       `,
-      [companyId]);
+        [companyId]
+      );
 
       await connection.commit();
 
@@ -249,8 +335,10 @@ module.exports = (pool) => {
 
   /* ======================================================
      ACTUALIZAR EMPRESA
+     - OFFICE_ADMIN solo puede editar empresas de su oficina
+     - no se cambia office_id desde OFFICE_ADMIN
   ====================================================== */
-  router.put('/:id', async (req, res) => {
+  router.put('/:id', verifyToken, requireAdmin, async (req, res) => {
     const connection = await pool.getConnection();
 
     try {
@@ -282,7 +370,7 @@ module.exports = (pool) => {
       await connection.beginTransaction();
 
       const [existingRows] = await connection.query(
-        `SELECT id FROM companies WHERE id = ?`,
+        `SELECT id, office_id FROM companies WHERE id = ?`,
         [id]
       );
 
@@ -291,7 +379,23 @@ module.exports = (pool) => {
         return res.status(404).json({ message: 'Empresa no encontrada' });
       }
 
-      await connection.query(`
+      const company = existingRows[0];
+
+      if (
+        req.user.role === 'OFFICE_ADMIN' &&
+        Number(company.office_id) !== Number(req.user.office_id)
+      ) {
+        await connection.rollback();
+        return res.status(403).json({ message: 'No puedes editar esta empresa' });
+      }
+
+      const finalOfficeId =
+        req.user.role === 'MASTER'
+          ? (office_id || company.office_id)
+          : company.office_id;
+
+      await connection.query(
+        `
         UPDATE companies
         SET
           office_id = ?,
@@ -309,35 +413,38 @@ module.exports = (pool) => {
           notes = ?
         WHERE id = ?
       `,
-      [
-        office_id || 1,
-        rut,
-        name,
-        legal_name || null,
-        business_type || null,
-        email || null,
-        phone || null,
-        address || null,
-        commune || null,
-        city || null,
-        region_name || null,
-        status || 'active',
-        notes || null,
-        id
-      ]);
+        [
+          finalOfficeId,
+          rut,
+          name,
+          legal_name || null,
+          business_type || null,
+          email || null,
+          phone || null,
+          address || null,
+          commune || null,
+          city || null,
+          region_name || null,
+          status || 'active',
+          notes || null,
+          id
+        ]
+      );
 
       if (year_num) {
-        await connection.query(`
+        await connection.query(
+          `
           UPDATE accounting_periods
           SET year_num = ?, start_date = ?, end_date = ?
           WHERE company_id = ? AND is_current = 1
         `,
-        [
-          Number(year_num),
-          `${Number(year_num)}-01-01`,
-          `${Number(year_num)}-12-31`,
-          id
-        ]);
+          [
+            Number(year_num),
+            `${Number(year_num)}-01-01`,
+            `${Number(year_num)}-12-31`,
+            id
+          ]
+        );
       }
 
       await connection.commit();
@@ -353,21 +460,38 @@ module.exports = (pool) => {
   });
 
   /* ======================================================
-     DESACTIVAR EMPRESA (NO ELIMINAR)
+     DESACTIVAR EMPRESA
   ====================================================== */
-  router.delete('/:id', async (req, res) => {
+  router.delete('/:id', verifyToken, requireAdmin, async (req, res) => {
     try {
       const { id } = req.params;
 
-      const [result] = await pool.query(`
+      const [rows] = await pool.query(
+        `SELECT id, office_id FROM companies WHERE id = ?`,
+        [id]
+      );
+
+      if (rows.length === 0) {
+        return res.status(404).json({ message: 'Empresa no encontrada' });
+      }
+
+      const company = rows[0];
+
+      if (
+        req.user.role === 'OFFICE_ADMIN' &&
+        Number(company.office_id) !== Number(req.user.office_id)
+      ) {
+        return res.status(403).json({ message: 'No puedes desactivar esta empresa' });
+      }
+
+      await pool.query(
+        `
         UPDATE companies
         SET status = 'inactive'
         WHERE id = ?
-      `, [id]);
-
-      if (result.affectedRows === 0) {
-        return res.status(404).json({ message: 'Empresa no encontrada' });
-      }
+      `,
+        [id]
+      );
 
       res.json({ message: 'Empresa desactivada correctamente' });
     } catch (err) {
