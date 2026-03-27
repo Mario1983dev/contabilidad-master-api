@@ -15,11 +15,11 @@ function authenticateToken(req, res, next) {
 
     req.user = {
       id: decoded.id,
-      username: decoded.username,
-      email: decoded.email,
-      role: decoded.role,
-      scope: decoded.scope,
-      office_id: decoded.office_id
+      username: decoded.username || null,
+      email: decoded.email || null,
+      role: decoded.role || null,
+      scope: decoded.scope || null,
+      office_id: decoded.office_id ?? null
     };
 
     next();
@@ -36,7 +36,7 @@ function allowRoles(...allowedRoles) {
       return res.status(403).json({ message: 'Usuario sin rol válido' });
     }
 
-    const normalizedAllowed = allowedRoles.map(r =>
+    const normalizedAllowed = allowedRoles.map((r) =>
       String(r).trim().toUpperCase()
     );
 

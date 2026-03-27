@@ -32,50 +32,95 @@ app.get('/', (req, res) => {
 });
 
 /* ======================================================
-   LOGIN GENERAL (YA ESTÁ PERFECTO)
+   HELPERS LOGIN
+====================================================== */
+async function findMasterUserByEmail(email) {
+  try {
+    const [rows] = await pool.query(
+      `SELECT id, username, email, password_hash, is_active
+       FROM master_users
+       WHERE email = ?
+       LIMIT 1`,
+      [email]
+    );
+
+    return rows.length > 0 ? rows[0] : null;
+  } catch {
+    const [rows] = await pool.query(
+      `SELECT id, email, password_hash, is_active
+       FROM master_users
+       WHERE email = ?
+       LIMIT 1`,
+      [email]
+    );
+
+    return rows.length > 0 ? rows[0] : null;
+  }
+}
+
+async function findOfficeAdminByUsername(username) {
+  const [rows] = await pool.query(
+    `SELECT id, office_id, username, email, password_hash, is_active
+     FROM office_admins
+     WHERE username = ?
+     LIMIT 1`,
+    [username]
+  );
+
+  return rows.length > 0 ? rows[0] : null;
+}
+
+async function findOfficeUserByUsername(username) {
+  const [rows] = await pool.query(
+    `SELECT id, office_id, username, name, email, password_hash
+     FROM office_users
+     WHERE username = ?
+     LIMIT 1`,
+    [username]
+  );
+
+  return rows.length > 0 ? rows[0] : null;
+}
+
+/* ======================================================
+   LOGIN GENERAL
+   - MASTER: email
+   - OFFICE_ADMIN: username
+   - OFFICE_USER: username
+   - Compatible con frontend que envía usernameOrEmail
 ====================================================== */
 app.post('/api/login', async (req, res) => {
   try {
     const { email, username, usernameOrEmail, password } = req.body || {};
-    const loginValue = String(usernameOrEmail || username || email || '').trim();
 
-    if (!loginValue || !password) {
+    const rawLogin = String(
+      usernameOrEmail || email || username || ''
+    ).trim();
+
+    if (!rawLogin || !password) {
       return res.status(400).json({
         message: 'Usuario/email y password son obligatorios'
       });
     }
 
-    /* ===== MASTER ===== */
-    let masterRows = [];
+    const isEmailLogin = rawLogin.includes('@');
 
-    try {
-      const [rows] = await pool.query(
-        `SELECT id, username, email, password_hash, is_active
-         FROM master_users
-         WHERE username = ? OR email = ?
-         LIMIT 1`,
-        [loginValue, loginValue]
-      );
-      masterRows = rows;
-    } catch {
-      const [rows] = await pool.query(
-        `SELECT id, email, password_hash, is_active
-         FROM master_users
-         WHERE email = ?
-         LIMIT 1`,
-        [loginValue]
-      );
-      masterRows = rows;
-    }
+    /* ===== MASTER → SOLO EMAIL ===== */
+    if (isEmailLogin) {
+      const masterUser = await findMasterUserByEmail(rawLogin);
 
-    if (masterRows.length > 0) {
-      const u = masterRows[0];
+      if (!masterUser) {
+        return res.status(401).json({ message: 'Credenciales inválidas' });
+      }
 
-      if (!Number(u.is_active)) {
+      if (!Number(masterUser.is_active)) {
         return res.status(403).json({ message: 'Usuario inactivo' });
       }
 
-      const ok = bcrypt.compareSync(password, String(u.password_hash).trim());
+      const ok = bcrypt.compareSync(
+        password,
+        String(masterUser.password_hash).trim()
+      );
 
       if (!ok) {
         return res.status(401).json({ message: 'Credenciales inválidas' });
@@ -83,9 +128,9 @@ app.post('/api/login', async (req, res) => {
 
       const token = jwt.sign(
         {
-          id: u.id,
-          username: u.username || null,
-          email: u.email,
+          id: masterUser.id,
+          username: masterUser.username || null,
+          email: masterUser.email,
           role: 'MASTER',
           scope: 'master'
         },
@@ -96,32 +141,27 @@ app.post('/api/login', async (req, res) => {
       return res.json({
         token,
         user: {
-          id: u.id,
-          username: u.username || null,
-          email: u.email,
+          id: masterUser.id,
+          username: masterUser.username || null,
+          email: masterUser.email,
           role: 'MASTER',
           scope: 'master'
         }
       });
     }
 
-    /* ===== OFFICE ADMIN ===== */
-    const [admins] = await pool.query(
-      `SELECT id, office_id, username, email, password_hash, is_active
-       FROM office_admins
-       WHERE username = ? OR email = ?
-       LIMIT 1`,
-      [loginValue, loginValue]
-    );
+    /* ===== OFFICE ADMIN → SOLO USERNAME ===== */
+    const officeAdmin = await findOfficeAdminByUsername(rawLogin);
 
-    if (admins.length > 0) {
-      const u = admins[0];
-
-      if (!Number(u.is_active)) {
+    if (officeAdmin) {
+      if (!Number(officeAdmin.is_active)) {
         return res.status(403).json({ message: 'Usuario inactivo' });
       }
 
-      const ok = bcrypt.compareSync(password, String(u.password_hash).trim());
+      const ok = bcrypt.compareSync(
+        password,
+        String(officeAdmin.password_hash).trim()
+      );
 
       if (!ok) {
         return res.status(401).json({ message: 'Credenciales inválidas' });
@@ -129,10 +169,10 @@ app.post('/api/login', async (req, res) => {
 
       const token = jwt.sign(
         {
-          id: u.id,
-          office_id: u.office_id,
-          username: u.username,
-          email: u.email,
+          id: officeAdmin.id,
+          office_id: officeAdmin.office_id,
+          username: officeAdmin.username,
+          email: officeAdmin.email,
           role: 'OFFICE_ADMIN',
           scope: 'office_admin'
         },
@@ -143,29 +183,24 @@ app.post('/api/login', async (req, res) => {
       return res.json({
         token,
         user: {
-          id: u.id,
-          office_id: u.office_id,
-          username: u.username,
-          email: u.email,
+          id: officeAdmin.id,
+          office_id: officeAdmin.office_id,
+          username: officeAdmin.username,
+          email: officeAdmin.email,
           role: 'OFFICE_ADMIN',
           scope: 'office_admin'
         }
       });
     }
 
-    /* ===== OFFICE USER ===== */
-    const [users] = await pool.query(
-      `SELECT id, office_id, username, name, email, password_hash
-       FROM office_users
-       WHERE username = ? OR email = ?
-       LIMIT 1`,
-      [loginValue, loginValue]
-    );
+    /* ===== OFFICE USER → SOLO USERNAME ===== */
+    const officeUser = await findOfficeUserByUsername(rawLogin);
 
-    if (users.length > 0) {
-      const u = users[0];
-
-      const ok = bcrypt.compareSync(password, String(u.password_hash).trim());
+    if (officeUser) {
+      const ok = bcrypt.compareSync(
+        password,
+        String(officeUser.password_hash).trim()
+      );
 
       if (!ok) {
         return res.status(401).json({ message: 'Credenciales inválidas' });
@@ -173,10 +208,10 @@ app.post('/api/login', async (req, res) => {
 
       const token = jwt.sign(
         {
-          id: u.id,
-          office_id: u.office_id,
-          username: u.username,
-          email: u.email,
+          id: officeUser.id,
+          office_id: officeUser.office_id,
+          username: officeUser.username,
+          email: officeUser.email,
           role: 'OFFICE_USER',
           scope: 'office_user'
         },
@@ -187,11 +222,11 @@ app.post('/api/login', async (req, res) => {
       return res.json({
         token,
         user: {
-          id: u.id,
-          office_id: u.office_id,
-          username: u.username,
-          name: u.name,
-          email: u.email,
+          id: officeUser.id,
+          office_id: officeUser.office_id,
+          username: officeUser.username,
+          name: officeUser.name,
+          email: officeUser.email,
           role: 'OFFICE_USER',
           scope: 'office_user'
         }
@@ -207,12 +242,10 @@ app.post('/api/login', async (req, res) => {
 });
 
 /* ======================================================
-   ROUTES PROTEGIDAS (USANDO NUEVO MIDDLEWARE)
+   ROUTES PROTEGIDAS
 ====================================================== */
-
 app.use('/companies', companiesRoutes(pool));
 app.use('/office-users', officeUsersRoutes(pool));
-
 app.use('/accounts', accountsRoutes(pool));
 app.use('/journal-entries', journalEntriesRoutes(pool));
 

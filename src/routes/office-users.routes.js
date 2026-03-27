@@ -10,8 +10,6 @@ module.exports = (pool) => {
 
   /* ======================================================
      LISTAR USUARIOS DE OFICINA
-     - MASTER: puede ver por officeId
-     - OFFICE_ADMIN: solo puede ver los de su oficina
   ====================================================== */
   router.get(
     '/office/:officeId',
@@ -47,10 +45,10 @@ module.exports = (pool) => {
           [officeId]
         );
 
-        res.json(rows);
+        return res.json(rows);
       } catch (err) {
         console.error('LIST OFFICE USERS ERROR:', err);
-        res.status(500).json({
+        return res.status(500).json({
           message: 'Error interno al listar usuarios de oficina'
         });
       }
@@ -58,60 +56,7 @@ module.exports = (pool) => {
   );
 
   /* ======================================================
-     OBTENER UN USUARIO
-  ====================================================== */
-  router.get(
-    '/:id',
-    authenticateToken,
-    allowRoles('MASTER', 'OFFICE_ADMIN'),
-    async (req, res) => {
-      try {
-        const { id } = req.params;
-
-        const [rows] = await pool.query(
-          `SELECT
-             id,
-             office_id,
-             name,
-             email,
-             role,
-             status,
-             created_at,
-             updated_at
-           FROM office_users
-           WHERE id = ?
-           LIMIT 1`,
-          [id]
-        );
-
-        if (!rows.length) {
-          return res.status(404).json({ message: 'Usuario no encontrado' });
-        }
-
-        const officeUser = rows[0];
-        const userRole = String(req.user.role || '').trim().toUpperCase();
-
-        if (
-          userRole === 'OFFICE_ADMIN' &&
-          Number(officeUser.office_id) !== Number(req.user.office_id)
-        ) {
-          return res.status(403).json({
-            message: 'No puedes ver este usuario'
-          });
-        }
-
-        res.json(officeUser);
-      } catch (err) {
-        console.error('GET OFFICE USER ERROR:', err);
-        res.status(500).json({ message: 'Error interno al obtener usuario' });
-      }
-    }
-  );
-
-  /* ======================================================
      CREAR USUARIO
-     - MASTER: puede enviar office_id
-     - OFFICE_ADMIN: usa office_id del token
   ====================================================== */
   router.post(
     '/',
@@ -124,8 +69,8 @@ module.exports = (pool) => {
 
         const finalOfficeId =
           userRole === 'OFFICE_ADMIN'
-            ? req.user.office_id
-            : office_id;
+            ? Number(req.user.office_id)
+            : Number(office_id);
 
         if (!finalOfficeId || !name || !email || !password) {
           return res.status(400).json({
@@ -133,34 +78,59 @@ module.exports = (pool) => {
           });
         }
 
-        const normalizedRole = String(role || 'OFFICE_USER')
-          .trim()
-          .toUpperCase();
+        let normalizedRole = String(role || 'user').trim().toLowerCase();
 
-        if (!['OFFICE_ADMIN', 'OFFICE_USER'].includes(normalizedRole)) {
+        if (normalizedRole === 'admin') {
+          normalizedRole = 'OFFICE_ADMIN';
+        } else if (normalizedRole === 'user') {
+          normalizedRole = 'OFFICE_USER';
+        } else {
           return res.status(400).json({ message: 'Rol inválido' });
         }
 
+        const normalizedName = String(name).trim();
+        const normalizedEmail = String(email).trim().toLowerCase();
+        const username = normalizedEmail.split('@')[0].trim();
+
+        if (!username) {
+          return res.status(400).json({
+            message: 'No se pudo generar username desde el email'
+          });
+        }
+
+        console.log('BODY CREATE USER =>', req.body);
+        console.log('FINAL OFFICE ID =>', finalOfficeId);
+        console.log('NORMALIZED NAME =>', normalizedName);
+        console.log('NORMALIZED EMAIL =>', normalizedEmail);
+        console.log('USERNAME =>', username);
+        console.log('NORMALIZED ROLE =>', normalizedRole);
+        console.log('STATUS =>', status ?? 1);
+
         const [officeRows] = await pool.query(
-          `SELECT id FROM offices WHERE id = ?`,
+          `SELECT id
+           FROM offices
+           WHERE id = ?
+           LIMIT 1`,
           [finalOfficeId]
         );
 
         if (!officeRows.length) {
-          return res.status(400).json({ message: 'La oficina indicada no existe' });
+          return res.status(400).json({
+            message: 'La oficina indicada no existe'
+          });
         }
 
         const [exists] = await pool.query(
           `SELECT id
            FROM office_users
-           WHERE email = ?
+           WHERE email = ? OR username = ?
            LIMIT 1`,
-          [email]
+          [normalizedEmail, username]
         );
 
         if (exists.length > 0) {
           return res.status(400).json({
-            message: 'Ya existe un usuario con ese email'
+            message: 'Ya existe un usuario con ese email o username'
           });
         }
 
@@ -168,25 +138,33 @@ module.exports = (pool) => {
 
         const [result] = await pool.query(
           `INSERT INTO office_users
-           (office_id, name, email, password_hash, role, status)
-           VALUES (?, ?, ?, ?, ?, ?)`,
+           (office_id, name, username, email, password_hash, role, status)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
           [
             finalOfficeId,
-            name,
-            email,
+            normalizedName,
+            username,
+            normalizedEmail,
             password_hash,
             normalizedRole,
             status ?? 1
           ]
         );
 
-        res.status(201).json({
+        return res.status(201).json({
           message: 'Usuario creado correctamente',
           id: result.insertId
         });
       } catch (err) {
         console.error('CREATE OFFICE USER ERROR:', err);
-        res.status(500).json({ message: 'Error interno al crear usuario' });
+        console.error('SQL MESSAGE =>', err.sqlMessage);
+        console.error('SQL CODE =>', err.code);
+        console.error('SQL ERRNO =>', err.errno);
+        console.error('SQL =>', err.sql);
+
+        return res.status(500).json({
+          message: 'Error interno al crear usuario'
+        });
       }
     }
   );
@@ -210,7 +188,10 @@ module.exports = (pool) => {
         }
 
         const [userRows] = await pool.query(
-          `SELECT id, office_id FROM office_users WHERE id = ? LIMIT 1`,
+          `SELECT id, office_id
+           FROM office_users
+           WHERE id = ?
+           LIMIT 1`,
           [id]
         );
 
@@ -230,20 +211,25 @@ module.exports = (pool) => {
           });
         }
 
-        const normalizedRole = String(role || 'OFFICE_USER')
-          .trim()
-          .toUpperCase();
+        let normalizedRole = String(role || 'user').trim().toLowerCase();
 
-        if (!['OFFICE_ADMIN', 'OFFICE_USER'].includes(normalizedRole)) {
+        if (normalizedRole === 'admin') {
+          normalizedRole = 'OFFICE_ADMIN';
+        } else if (normalizedRole === 'user') {
+          normalizedRole = 'OFFICE_USER';
+        } else {
           return res.status(400).json({ message: 'Rol inválido' });
         }
+
+        const normalizedName = String(name).trim();
+        const normalizedEmail = String(email).trim().toLowerCase();
 
         const [exists] = await pool.query(
           `SELECT id
            FROM office_users
            WHERE email = ? AND id <> ?
            LIMIT 1`,
-          [email, id]
+          [normalizedEmail, id]
         );
 
         if (exists.length > 0) {
@@ -262,8 +248,8 @@ module.exports = (pool) => {
              updated_at = NOW()
            WHERE id = ?`,
           [
-            name,
-            email,
+            normalizedName,
+            normalizedEmail,
             normalizedRole,
             status ?? 1,
             id
@@ -274,10 +260,17 @@ module.exports = (pool) => {
           return res.status(404).json({ message: 'Usuario no encontrado' });
         }
 
-        res.json({ message: 'Usuario actualizado correctamente' });
+        return res.json({ message: 'Usuario actualizado correctamente' });
       } catch (err) {
         console.error('UPDATE OFFICE USER ERROR:', err);
-        res.status(500).json({ message: 'Error interno al actualizar usuario' });
+        console.error('SQL MESSAGE =>', err.sqlMessage);
+        console.error('SQL CODE =>', err.code);
+        console.error('SQL ERRNO =>', err.errno);
+        console.error('SQL =>', err.sql);
+
+        return res.status(500).json({
+          message: 'Error interno al actualizar usuario'
+        });
       }
     }
   );
@@ -299,7 +292,10 @@ module.exports = (pool) => {
         }
 
         const [userRows] = await pool.query(
-          `SELECT id, office_id FROM office_users WHERE id = ? LIMIT 1`,
+          `SELECT id, office_id
+           FROM office_users
+           WHERE id = ?
+           LIMIT 1`,
           [id]
         );
 
@@ -332,10 +328,15 @@ module.exports = (pool) => {
           return res.status(404).json({ message: 'Usuario no encontrado' });
         }
 
-        res.json({ message: 'Estado actualizado correctamente' });
+        return res.json({ message: 'Estado actualizado correctamente' });
       } catch (err) {
         console.error('UPDATE OFFICE USER STATUS ERROR:', err);
-        res.status(500).json({
+        console.error('SQL MESSAGE =>', err.sqlMessage);
+        console.error('SQL CODE =>', err.code);
+        console.error('SQL ERRNO =>', err.errno);
+        console.error('SQL =>', err.sql);
+
+        return res.status(500).json({
           message: 'Error interno al actualizar estado'
         });
       }
@@ -359,7 +360,10 @@ module.exports = (pool) => {
         }
 
         const [userRows] = await pool.query(
-          `SELECT id, office_id FROM office_users WHERE id = ? LIMIT 1`,
+          `SELECT id, office_id
+           FROM office_users
+           WHERE id = ?
+           LIMIT 1`,
           [id]
         );
 
@@ -394,10 +398,15 @@ module.exports = (pool) => {
           return res.status(404).json({ message: 'Usuario no encontrado' });
         }
 
-        res.json({ message: 'Password actualizada correctamente' });
+        return res.json({ message: 'Password actualizada correctamente' });
       } catch (err) {
         console.error('UPDATE OFFICE USER PASSWORD ERROR:', err);
-        res.status(500).json({
+        console.error('SQL MESSAGE =>', err.sqlMessage);
+        console.error('SQL CODE =>', err.code);
+        console.error('SQL ERRNO =>', err.errno);
+        console.error('SQL =>', err.sql);
+
+        return res.status(500).json({
           message: 'Error interno al actualizar password'
         });
       }
@@ -416,7 +425,10 @@ module.exports = (pool) => {
         const { id } = req.params;
 
         const [userRows] = await pool.query(
-          `SELECT id, office_id FROM office_users WHERE id = ? LIMIT 1`,
+          `SELECT id, office_id
+           FROM office_users
+           WHERE id = ?
+           LIMIT 1`,
           [id]
         );
 
@@ -446,10 +458,17 @@ module.exports = (pool) => {
           return res.status(404).json({ message: 'Usuario no encontrado' });
         }
 
-        res.json({ message: 'Usuario eliminado correctamente' });
+        return res.json({ message: 'Usuario eliminado correctamente' });
       } catch (err) {
         console.error('DELETE OFFICE USER ERROR:', err);
-        res.status(500).json({ message: 'Error interno al eliminar usuario' });
+        console.error('SQL MESSAGE =>', err.sqlMessage);
+        console.error('SQL CODE =>', err.code);
+        console.error('SQL ERRNO =>', err.errno);
+        console.error('SQL =>', err.sql);
+
+        return res.status(500).json({
+          message: 'Error interno al eliminar usuario'
+        });
       }
     }
   );

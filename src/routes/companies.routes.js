@@ -10,12 +10,12 @@ module.exports = (pool) => {
   /* ======================================================
      LISTAR EMPRESAS
      - MASTER: puede ver todas o filtrar por office_id
-     - OFFICE_ADMIN: solo ve las de su oficina
+     - OFFICE_ADMIN / OFFICE_USER: solo ven las de su oficina
   ====================================================== */
   router.get(
     '/',
     authenticateToken,
-    allowRoles('MASTER', 'OFFICE_ADMIN'),
+    allowRoles('MASTER', 'OFFICE_ADMIN', 'OFFICE_USER'),
     async (req, res) => {
       try {
         let sql = `
@@ -46,14 +46,31 @@ module.exports = (pool) => {
         `;
 
         const params = [];
-        const userRole = String(req.user.role || '').trim().toUpperCase();
+        const userRole = String(req.user?.role || '').trim().toUpperCase();
 
-        if (userRole === 'OFFICE_ADMIN') {
+        if (userRole === 'OFFICE_ADMIN' || userRole === 'OFFICE_USER') {
+          const officeId = Number(req.user?.office_id);
+
+          if (!officeId || Number.isNaN(officeId)) {
+            console.error('LIST COMPANIES ERROR: office_id inválido en token', req.user);
+            return res.status(400).json({
+              message: 'Usuario sin office_id válido en el token'
+            });
+          }
+
           sql += ` WHERE c.office_id = ? `;
-          params.push(req.user.office_id);
+          params.push(officeId);
         } else if (req.query.office_id) {
+          const officeId = Number(req.query.office_id);
+
+          if (!officeId || Number.isNaN(officeId)) {
+            return res.status(400).json({
+              message: 'office_id inválido'
+            });
+          }
+
           sql += ` WHERE c.office_id = ? `;
-          params.push(Number(req.query.office_id));
+          params.push(officeId);
         }
 
         sql += ` ORDER BY c.id DESC `;
@@ -73,7 +90,7 @@ module.exports = (pool) => {
   router.get(
     '/:id',
     authenticateToken,
-    allowRoles('MASTER', 'OFFICE_ADMIN'),
+    allowRoles('MASTER', 'OFFICE_ADMIN', 'OFFICE_USER'),
     async (req, res) => {
       try {
         const { id } = req.params;
@@ -112,13 +129,20 @@ module.exports = (pool) => {
         }
 
         const company = rows[0];
-        const userRole = String(req.user.role || '').trim().toUpperCase();
+        const userRole = String(req.user?.role || '').trim().toUpperCase();
 
-        if (
-          userRole === 'OFFICE_ADMIN' &&
-          Number(company.office_id) !== Number(req.user.office_id)
-        ) {
-          return res.status(403).json({ message: 'No puedes ver esta empresa' });
+        if (userRole === 'OFFICE_ADMIN' || userRole === 'OFFICE_USER') {
+          const officeId = Number(req.user?.office_id);
+
+          if (!officeId || Number.isNaN(officeId)) {
+            return res.status(400).json({
+              message: 'Usuario sin office_id válido en el token'
+            });
+          }
+
+          if (Number(company.office_id) !== officeId) {
+            return res.status(403).json({ message: 'No puedes ver esta empresa' });
+          }
         }
 
         res.json(company);
@@ -159,14 +183,14 @@ module.exports = (pool) => {
           year_num
         } = req.body || {};
 
-        const userRole = String(req.user.role || '').trim().toUpperCase();
+        const userRole = String(req.user?.role || '').trim().toUpperCase();
 
         const finalOfficeId =
           userRole === 'OFFICE_ADMIN'
-            ? req.user.office_id
-            : office_id;
+            ? Number(req.user?.office_id)
+            : Number(office_id);
 
-        if (!finalOfficeId || !rut || !name) {
+        if (!finalOfficeId || Number.isNaN(finalOfficeId) || !rut || !name) {
           return res.status(400).json({
             message: 'office_id, rut y name son obligatorios'
           });
@@ -313,8 +337,6 @@ module.exports = (pool) => {
 
   /* ======================================================
      ACTUALIZAR EMPRESA
-     - OFFICE_ADMIN solo puede editar empresas de su oficina
-     - no se cambia office_id desde OFFICE_ADMIN
   ====================================================== */
   router.put(
     '/:id',
@@ -362,22 +384,30 @@ module.exports = (pool) => {
         }
 
         const company = existingRows[0];
-        const userRole = String(req.user.role || '').trim().toUpperCase();
+        const userRole = String(req.user?.role || '').trim().toUpperCase();
 
-        if (
-          userRole === 'OFFICE_ADMIN' &&
-          Number(company.office_id) !== Number(req.user.office_id)
-        ) {
-          await connection.rollback();
-          return res
-            .status(403)
-            .json({ message: 'No puedes editar esta empresa' });
+        if (userRole === 'OFFICE_ADMIN') {
+          const officeId = Number(req.user?.office_id);
+
+          if (!officeId || Number.isNaN(officeId)) {
+            await connection.rollback();
+            return res.status(400).json({
+              message: 'Usuario sin office_id válido en el token'
+            });
+          }
+
+          if (Number(company.office_id) !== officeId) {
+            await connection.rollback();
+            return res
+              .status(403)
+              .json({ message: 'No puedes editar esta empresa' });
+          }
         }
 
         const finalOfficeId =
           userRole === 'MASTER'
-            ? office_id || company.office_id
-            : company.office_id;
+            ? Number(office_id) || Number(company.office_id)
+            : Number(company.office_id);
 
         await connection.query(
           `
@@ -417,19 +447,23 @@ module.exports = (pool) => {
         );
 
         if (year_num) {
-          await connection.query(
-            `
-            UPDATE accounting_periods
-            SET year_num = ?, start_date = ?, end_date = ?
-            WHERE company_id = ? AND is_current = 1
-          `,
-            [
-              Number(year_num),
-              `${Number(year_num)}-01-01`,
-              `${Number(year_num)}-12-31`,
-              id
-            ]
-          );
+          const yearNum = Number(year_num);
+
+          if (!Number.isNaN(yearNum) && yearNum > 0) {
+            await connection.query(
+              `
+              UPDATE accounting_periods
+              SET year_num = ?, start_date = ?, end_date = ?
+              WHERE company_id = ? AND is_current = 1
+            `,
+              [
+                yearNum,
+                `${yearNum}-01-01`,
+                `${yearNum}-12-31`,
+                id
+              ]
+            );
+          }
         }
 
         await connection.commit();
@@ -466,15 +500,22 @@ module.exports = (pool) => {
         }
 
         const company = rows[0];
-        const userRole = String(req.user.role || '').trim().toUpperCase();
+        const userRole = String(req.user?.role || '').trim().toUpperCase();
 
-        if (
-          userRole === 'OFFICE_ADMIN' &&
-          Number(company.office_id) !== Number(req.user.office_id)
-        ) {
-          return res
-            .status(403)
-            .json({ message: 'No puedes desactivar esta empresa' });
+        if (userRole === 'OFFICE_ADMIN') {
+          const officeId = Number(req.user?.office_id);
+
+          if (!officeId || Number.isNaN(officeId)) {
+            return res.status(400).json({
+              message: 'Usuario sin office_id válido en el token'
+            });
+          }
+
+          if (Number(company.office_id) !== officeId) {
+            return res
+              .status(403)
+              .json({ message: 'No puedes desactivar esta empresa' });
+          }
         }
 
         await pool.query(
