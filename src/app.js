@@ -10,9 +10,13 @@ const officesRoutesFactory = require('./routes/offices.routes');
 const companiesRoutes = require('./routes/companies.routes');
 const accountsRoutes = require('./routes/accounts.routes');
 const journalEntriesRoutes = require('./routes/journal-entries.routes');
+const configurationRoutes = require('./routes/configuration.routes');
 
 const { authenticateToken, allowRoles } = require('./middlewares/auth.middleware');
 
+// OJO:
+// Si db.js está en la raíz del proyecto, deja '../db'.
+// Si db.js está dentro de src, cambia esto a './db'.
 const pool = require('./db');
 
 const app = express();
@@ -84,10 +88,6 @@ async function findOfficeUserByUsername(username) {
 
 /* ======================================================
    LOGIN GENERAL
-   - MASTER: email
-   - OFFICE_ADMIN: username
-   - OFFICE_USER: username
-   - Compatible con frontend que envía usernameOrEmail
 ====================================================== */
 app.post('/api/login', async (req, res) => {
   try {
@@ -105,7 +105,7 @@ app.post('/api/login', async (req, res) => {
 
     const isEmailLogin = rawLogin.includes('@');
 
-    /* ===== MASTER → SOLO EMAIL ===== */
+    // ===== MASTER =====
     if (isEmailLogin) {
       const masterUser = await findMasterUserByEmail(rawLogin);
 
@@ -150,7 +150,7 @@ app.post('/api/login', async (req, res) => {
       });
     }
 
-    /* ===== OFFICE ADMIN → SOLO USERNAME ===== */
+    // ===== OFFICE ADMIN =====
     const officeAdmin = await findOfficeAdminByUsername(rawLogin);
 
     if (officeAdmin) {
@@ -193,7 +193,7 @@ app.post('/api/login', async (req, res) => {
       });
     }
 
-    /* ===== OFFICE USER → SOLO USERNAME ===== */
+    // ===== OFFICE USER =====
     const officeUser = await findOfficeUserByUsername(rawLogin);
 
     if (officeUser) {
@@ -234,7 +234,6 @@ app.post('/api/login', async (req, res) => {
     }
 
     return res.status(401).json({ message: 'Credenciales inválidas' });
-
   } catch (err) {
     console.error('LOGIN ERROR:', err);
     return res.status(500).json({ message: 'Error interno del servidor' });
@@ -247,7 +246,8 @@ app.post('/api/login', async (req, res) => {
 app.use('/companies', companiesRoutes(pool));
 app.use('/office-users', officeUsersRoutes(pool));
 app.use('/accounts', accountsRoutes(pool));
-app.use('/journal-entries', journalEntriesRoutes(pool));
+app.use('/journal-entries', journalEntriesRoutes(pool, authenticateToken));
+app.use('/configuration', configurationRoutes(pool));
 
 /* ======================================================
    MASTER ONLY
