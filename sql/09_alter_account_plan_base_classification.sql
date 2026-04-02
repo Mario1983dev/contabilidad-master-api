@@ -2,20 +2,74 @@ USE contabilidad_master;
 
 /* ======================================================
    09_alter_account_plan_base_classification.sql
-   Agrega clasificacion contable al plan base existente
+   Clasificación contable del plan base
 ====================================================== */
 
 /* ======================================================
-   1) AGREGAR COLUMNAS
+   0) CREAR TABLA SI NO EXISTE
 ====================================================== */
-ALTER TABLE account_plan_base
-  ADD COLUMN account_type ENUM('ACTIVO','PASIVO','PATRIMONIO','INGRESO','GASTO','RESULTADO')
-    NOT NULL DEFAULT 'ACTIVO' AFTER name,
-  ADD COLUMN balance_nature ENUM('DEBITO','CREDITO')
-    NOT NULL DEFAULT 'DEBITO' AFTER account_type;
+CREATE TABLE IF NOT EXISTS account_plan_base (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  code VARCHAR(20) NOT NULL,
+  name VARCHAR(150) NOT NULL,
+  parent_code VARCHAR(20) NULL,
+  level_num INT NOT NULL DEFAULT 1,
+  allows_entries TINYINT(1) NOT NULL DEFAULT 1,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  sort_order INT NOT NULL DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_account_plan_base_code (code)
+);
 
 /* ======================================================
-   2) CLASIFICAR ACTIVO
+   1) AGREGAR account_type SI NO EXISTE
+====================================================== */
+SET @sql = (
+  SELECT IF(
+    EXISTS (
+      SELECT 1
+      FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA = 'contabilidad_master'
+        AND TABLE_NAME = 'account_plan_base'
+        AND COLUMN_NAME = 'account_type'
+    ),
+    'SELECT ''account_type ya existe'';',
+    'ALTER TABLE account_plan_base
+       ADD COLUMN account_type ENUM(''ACTIVO'',''PASIVO'',''PATRIMONIO'',''INGRESO'',''GASTO'',''RESULTADO'')
+       NOT NULL DEFAULT ''ACTIVO'' AFTER name;'
+  )
+);
+
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+/* ======================================================
+   2) AGREGAR balance_nature SI NO EXISTE
+====================================================== */
+SET @sql = (
+  SELECT IF(
+    EXISTS (
+      SELECT 1
+      FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA = 'contabilidad_master'
+        AND TABLE_NAME = 'account_plan_base'
+        AND COLUMN_NAME = 'balance_nature'
+    ),
+    'SELECT ''balance_nature ya existe'';',
+    'ALTER TABLE account_plan_base
+       ADD COLUMN balance_nature ENUM(''DEBITO'',''CREDITO'')
+       NOT NULL DEFAULT ''DEBITO'' AFTER account_type;'
+  )
+);
+
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+/* ======================================================
+   3) CLASIFICAR ACTIVO
 ====================================================== */
 UPDATE account_plan_base
 SET
@@ -32,7 +86,7 @@ WHERE code IN (
 );
 
 /* ======================================================
-   3) CLASIFICAR PASIVO
+   4) CLASIFICAR PASIVO
 ====================================================== */
 UPDATE account_plan_base
 SET
@@ -45,7 +99,7 @@ WHERE code IN (
 );
 
 /* ======================================================
-   4) CLASIFICAR PATRIMONIO
+   5) CLASIFICAR PATRIMONIO
 ====================================================== */
 UPDATE account_plan_base
 SET
@@ -57,7 +111,7 @@ WHERE code IN (
 );
 
 /* ======================================================
-   5) CLASIFICAR INGRESOS
+   6) CLASIFICAR INGRESOS
 ====================================================== */
 UPDATE account_plan_base
 SET
@@ -70,7 +124,7 @@ WHERE code IN (
 );
 
 /* ======================================================
-   6) CLASIFICAR GASTOS
+   7) CLASIFICAR GASTOS
 ====================================================== */
 UPDATE account_plan_base
 SET
@@ -83,7 +137,7 @@ WHERE code IN (
 );
 
 /* ======================================================
-   7) CLASIFICAR RESULTADO
+   8) CLASIFICAR RESULTADO
 ====================================================== */
 UPDATE account_plan_base
 SET
@@ -92,7 +146,7 @@ SET
 WHERE code = '30203'; -- PERDIDA Y GANANCIA
 
 /* ======================================================
-   8) VERIFICACION FINAL
+   9) VERIFICACION FINAL
 ====================================================== */
 SELECT
   id,
