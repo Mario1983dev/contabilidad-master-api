@@ -2,7 +2,6 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 
 module.exports = (pool) => {
-
   const router = express.Router();
 
   function generarClaveTemporal() {
@@ -19,7 +18,6 @@ module.exports = (pool) => {
   ====================================================== */
   router.get('/', async (req, res) => {
     try {
-
       const [rows] = await pool.query(
         `SELECT id, rut, name, legal_name, email, phone, status, created_at, updated_at
          FROM offices
@@ -27,12 +25,9 @@ module.exports = (pool) => {
       );
 
       res.json(rows);
-
     } catch (err) {
-
       console.error('LIST OFFICES ERROR:', err);
       res.status(500).json({ message: 'Error interno' });
-
     }
   });
 
@@ -41,7 +36,6 @@ module.exports = (pool) => {
   ====================================================== */
   router.post('/', async (req, res) => {
     try {
-
       const { rut, name, legal_name, email, phone, status } = req.body || {};
 
       if (!rut || !name) {
@@ -72,12 +66,13 @@ module.exports = (pool) => {
       const passwordHash = await bcrypt.hash(tempPassword, 10);
 
       const adminUser = `admin${officeId}`;
+      const adminEmail = `${adminUser}@admin.local`;
 
-await pool.query(
-  `INSERT INTO office_admins (office_id, email, password_hash, is_active)
-   VALUES (?, ?, ?, 1)`,
-  [officeId, adminUser + '@admin.local', passwordHash]
-);
+      await pool.query(
+        `INSERT INTO office_admins (office_id, email, username, password_hash, is_active)
+         VALUES (?, ?, ?, ?, 1)`,
+        [officeId, adminEmail, adminUser, passwordHash]
+      );
 
       res.status(201).json({
         message: 'Oficina creada correctamente',
@@ -85,9 +80,7 @@ await pool.query(
         admin_user: adminUser,
         temp_password: tempPassword
       });
-
     } catch (err) {
-
       console.error('CREATE OFFICE ERROR:', err);
 
       if (err.code === 'ER_DUP_ENTRY') {
@@ -97,7 +90,6 @@ await pool.query(
       }
 
       res.status(500).json({ message: 'Error interno' });
-
     }
   });
 
@@ -106,7 +98,6 @@ await pool.query(
   ====================================================== */
   router.get('/:id', async (req, res) => {
     try {
-
       const id = Number(req.params.id);
 
       if (!id) {
@@ -129,12 +120,9 @@ await pool.query(
       }
 
       res.json(rows[0]);
-
     } catch (err) {
-
       console.error('GET OFFICE ERROR:', err);
       res.status(500).json({ message: 'Error interno' });
-
     }
   });
 
@@ -143,7 +131,6 @@ await pool.query(
   ====================================================== */
   router.put('/:id', async (req, res) => {
     try {
-
       const id = Number(req.params.id);
 
       if (!id) {
@@ -184,9 +171,7 @@ await pool.query(
       res.json({
         message: 'Actualizada correctamente'
       });
-
     } catch (err) {
-
       console.error('UPDATE OFFICE ERROR:', err);
 
       if (err.code === 'ER_DUP_ENTRY') {
@@ -196,7 +181,6 @@ await pool.query(
       }
 
       res.status(500).json({ message: 'Error interno' });
-
     }
   });
 
@@ -205,7 +189,6 @@ await pool.query(
   ====================================================== */
   router.put('/:id/status', async (req, res) => {
     try {
-
       const id = Number(req.params.id);
       const { status } = req.body || {};
 
@@ -239,12 +222,9 @@ await pool.query(
           ? 'Oficina activada correctamente'
           : 'Oficina desactivada correctamente'
       });
-
     } catch (err) {
-
       console.error('CHANGE STATUS OFFICE ERROR:', err);
       res.status(500).json({ message: 'Error interno' });
-
     }
   });
 
@@ -253,7 +233,6 @@ await pool.query(
   ====================================================== */
   router.delete('/:id', async (req, res) => {
     try {
-
       const id = Number(req.params.id);
 
       if (!id) {
@@ -278,15 +257,11 @@ await pool.query(
       res.json({
         message: 'Oficina desactivada correctamente'
       });
-
     } catch (err) {
-
       console.error('DELETE OFFICE ERROR:', err);
       res.status(500).json({ message: 'Error interno' });
-
     }
   });
 
   return router;
-
 };
