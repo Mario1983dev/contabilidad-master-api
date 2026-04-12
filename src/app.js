@@ -13,10 +13,6 @@ const journalEntriesRoutes = require('./routes/journal-entries.routes');
 const configurationRoutes = require('./routes/configuration.routes');
 
 const { authenticateToken, allowRoles } = require('./middlewares/auth.middleware');
-
-// OJO:
-// Si db.js está en la raíz del proyecto, deja '../db'.
-// Si db.js está dentro de src, cambia esto a './db'.
 const pool = require('./db');
 
 const app = express();
@@ -242,12 +238,27 @@ app.post('/api/login', async (req, res) => {
 
 /* ======================================================
    ROUTES PROTEGIDAS
+   Dejamos rutas con y sin /api para compatibilidad
 ====================================================== */
-app.use('/companies', companiesRoutes(pool));
-app.use('/office-users', officeUsersRoutes(pool));
-app.use('/accounts', accountsRoutes(pool));
-app.use('/journal-entries', journalEntriesRoutes(pool, authenticateToken));
-app.use('/configuration', configurationRoutes(pool));
+const companiesRouter = companiesRoutes(pool);
+const officeUsersRouter = officeUsersRoutes(pool);
+const accountsRouter = accountsRoutes(pool);
+const journalEntriesRouter = journalEntriesRoutes(pool, authenticateToken);
+const configurationRouter = configurationRoutes(pool);
+
+// Compatibilidad sin /api
+app.use('/companies', companiesRouter);
+app.use('/office-users', officeUsersRouter);
+app.use('/accounts', accountsRouter);
+app.use('/journal-entries', journalEntriesRouter);
+app.use('/configuration', configurationRouter);
+
+// Compatibilidad con /api
+app.use('/api/companies', companiesRouter);
+app.use('/api/office-users', officeUsersRouter);
+app.use('/api/accounts', accountsRouter);
+app.use('/api/journal-entries', journalEntriesRouter);
+app.use('/api/configuration', configurationRouter);
 
 /* ======================================================
    MASTER ONLY
