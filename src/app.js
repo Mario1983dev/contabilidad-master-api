@@ -12,6 +12,9 @@ const accountsRoutes = require('./routes/accounts.routes');
 const journalEntriesRoutes = require('./routes/journal-entries.routes');
 const configurationRoutes = require('./routes/configuration.routes');
 
+// 🔥 NUEVO: LIBRO MAYOR
+const ledgerRoutes = require('./routes/ledger.routes');
+
 const { authenticateToken, allowRoles } = require('./middlewares/auth.middleware');
 const pool = require('./db');
 
@@ -101,7 +104,7 @@ app.post('/api/login', async (req, res) => {
 
     const isEmailLogin = rawLogin.includes('@');
 
-    // ===== MASTER =====
+    // MASTER
     if (isEmailLogin) {
       const masterUser = await findMasterUserByEmail(rawLogin);
 
@@ -146,7 +149,7 @@ app.post('/api/login', async (req, res) => {
       });
     }
 
-    // ===== OFFICE ADMIN =====
+    // OFFICE ADMIN
     const officeAdmin = await findOfficeAdminByUsername(rawLogin);
 
     if (officeAdmin) {
@@ -189,7 +192,7 @@ app.post('/api/login', async (req, res) => {
       });
     }
 
-    // ===== OFFICE USER =====
+    // OFFICE USER
     const officeUser = await findOfficeUserByUsername(rawLogin);
 
     if (officeUser) {
@@ -238,7 +241,6 @@ app.post('/api/login', async (req, res) => {
 
 /* ======================================================
    ROUTES PROTEGIDAS
-   Dejamos rutas con y sin /api para compatibilidad
 ====================================================== */
 const companiesRouter = companiesRoutes(pool);
 const officeUsersRouter = officeUsersRoutes(pool);
@@ -246,19 +248,22 @@ const accountsRouter = accountsRoutes(pool);
 const journalEntriesRouter = journalEntriesRoutes(pool, authenticateToken);
 const configurationRouter = configurationRoutes(pool);
 
-// Compatibilidad sin /api
+// sin /api
 app.use('/companies', companiesRouter);
 app.use('/office-users', officeUsersRouter);
 app.use('/accounts', accountsRouter);
 app.use('/journal-entries', journalEntriesRouter);
 app.use('/configuration', configurationRouter);
 
-// Compatibilidad con /api
+// con /api
 app.use('/api/companies', companiesRouter);
 app.use('/api/office-users', officeUsersRouter);
 app.use('/api/accounts', accountsRouter);
 app.use('/api/journal-entries', journalEntriesRouter);
 app.use('/api/configuration', configurationRouter);
+
+// 🔥 LIBRO MAYOR
+app.use('/api', ledgerRoutes);
 
 /* ======================================================
    MASTER ONLY
