@@ -1,3 +1,5 @@
+console.log('>>> CARGANDO companies.routes.js');
+
 const express = require('express');
 const {
   authenticateToken,
@@ -18,6 +20,9 @@ module.exports = (pool) => {
     allowRoles('MASTER', 'OFFICE_ADMIN', 'OFFICE_USER'),
     async (req, res) => {
       try {
+        console.log('>>> ENTRANDO AL LISTADO DE EMPRESAS');
+        console.log('REQ.USER =>', req.user);
+
         let sql = `
           SELECT
             c.id,
@@ -39,7 +44,8 @@ module.exports = (pool) => {
             c.updated_at,
             o.name AS office_name
           FROM companies c
-          INNER JOIN offices o ON o.id = c.office_id
+          LEFT JOIN offices o
+            ON o.id = c.office_id
           LEFT JOIN accounting_periods p
             ON p.company_id = c.id
            AND p.is_current = 1
@@ -48,8 +54,12 @@ module.exports = (pool) => {
         const params = [];
         const userRole = String(req.user?.role || '').trim().toUpperCase();
 
+        console.log('USER ROLE =>', userRole);
+
         if (userRole === 'OFFICE_ADMIN' || userRole === 'OFFICE_USER') {
           const officeId = Number(req.user?.office_id);
+
+          console.log('OFFICE ID DESDE TOKEN =>', officeId);
 
           if (!officeId || Number.isNaN(officeId)) {
             console.error('LIST COMPANIES ERROR: office_id inválido en token', req.user);
@@ -63,6 +73,8 @@ module.exports = (pool) => {
         } else if (req.query.office_id) {
           const officeId = Number(req.query.office_id);
 
+          console.log('OFFICE ID DESDE QUERY =>', officeId);
+
           if (!officeId || Number.isNaN(officeId)) {
             return res.status(400).json({
               message: 'office_id inválido'
@@ -75,11 +87,17 @@ module.exports = (pool) => {
 
         sql += ` ORDER BY c.id DESC `;
 
+        console.log('SQL FINAL =>', sql);
+        console.log('PARAMS =>', params);
+
         const [rows] = await pool.query(sql, params);
-        res.json(rows);
+
+        console.log('ROWS COMPANIES =>', rows);
+
+        return res.json(rows || []);
       } catch (err) {
         console.error('LIST COMPANIES ERROR:', err);
-        res.status(500).json({ message: 'Error interno al listar empresas' });
+        return res.status(500).json({ message: 'Error interno al listar empresas' });
       }
     }
   );
@@ -145,10 +163,10 @@ module.exports = (pool) => {
           }
         }
 
-        res.json(company);
+        return res.json(company);
       } catch (err) {
         console.error('GET COMPANY ERROR:', err);
-        res.status(500).json({ message: 'Error interno al obtener empresa' });
+        return res.status(500).json({ message: 'Error interno al obtener empresa' });
       }
     }
   );
@@ -321,14 +339,14 @@ module.exports = (pool) => {
 
         await connection.commit();
 
-        res.status(201).json({
+        return res.status(201).json({
           message: 'Empresa creada correctamente',
           company_id: companyId
         });
       } catch (err) {
         await connection.rollback();
         console.error('CREATE COMPANY ERROR:', err);
-        res.status(500).json({ message: 'Error interno al crear empresa' });
+        return res.status(500).json({ message: 'Error interno al crear empresa' });
       } finally {
         connection.release();
       }
@@ -468,11 +486,11 @@ module.exports = (pool) => {
 
         await connection.commit();
 
-        res.json({ message: 'Empresa actualizada correctamente' });
+        return res.json({ message: 'Empresa actualizada correctamente' });
       } catch (err) {
         await connection.rollback();
         console.error('UPDATE COMPANY ERROR:', err);
-        res.status(500).json({ message: 'Error interno al actualizar empresa' });
+        return res.status(500).json({ message: 'Error interno al actualizar empresa' });
       } finally {
         connection.release();
       }
@@ -527,10 +545,10 @@ module.exports = (pool) => {
           [id]
         );
 
-        res.json({ message: 'Empresa desactivada correctamente' });
+        return res.json({ message: 'Empresa desactivada correctamente' });
       } catch (err) {
         console.error('DEACTIVATE COMPANY ERROR:', err);
-        res.status(500).json({ message: 'Error interno al desactivar empresa' });
+        return res.status(500).json({ message: 'Error interno al desactivar empresa' });
       }
     }
   );

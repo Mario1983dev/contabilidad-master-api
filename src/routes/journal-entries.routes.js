@@ -156,6 +156,69 @@ module.exports = (pool, verifyToken) => {
       totalCredit
     };
   }
+  
+    // GET /journal-entries/report
+  router.get('/report', verifyToken, async (req, res) => {
+    try {
+      const companyId = Number(req.query.company_id);
+      const fromDate = req.query.from_date;
+      const toDate = req.query.to_date;
+
+      if (!companyId) {
+        return res.status(400).json({
+          message: 'company_id es obligatorio'
+        });
+      }
+
+      if (!fromDate || !toDate) {
+        return res.status(400).json({
+          message: 'from_date y to_date son obligatorios'
+        });
+      }
+
+      const companyRows = await validateCompanyAccess(companyId, req.user);
+
+      if (companyRows.length === 0) {
+        return res.status(403).json({
+          message: 'No tienes acceso a esta empresa'
+        });
+      }
+
+      const [rows] = await pool.query(
+        `SELECT
+           je.id,
+           je.company_id,
+           je.entry_date,
+           je.entry_type,
+           je.description,
+           je.status,
+           jel.id AS line_id,
+           jel.account_id,
+           ca.code AS account_code,
+           ca.name AS account_name,
+           jel.description AS line_description,
+           jel.debit,
+           jel.credit
+         FROM journal_entries je
+         INNER JOIN journal_entry_lines jel
+           ON jel.entry_id = je.id
+         LEFT JOIN company_accounts ca
+           ON ca.id = jel.account_id
+         WHERE je.company_id = ?
+           AND je.status = 1
+           AND je.entry_date BETWEEN ? AND ?
+         ORDER BY je.entry_date ASC, je.id ASC, jel.id ASC`,
+        [companyId, fromDate, toDate]
+      );
+
+      return res.json(rows);
+    } catch (error) {
+      console.error('❌ ERROR GET journal report:', error);
+      return res.status(500).json({
+        message: 'Error al obtener libro diario'
+      });
+    }
+  });
 
   // GET /journal-entries/types
   router.get('/types', verifyToken, async (req, res) => {
