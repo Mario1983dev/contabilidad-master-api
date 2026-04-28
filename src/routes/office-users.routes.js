@@ -56,7 +56,7 @@ module.exports = (pool) => {
   );
 
   /* ======================================================
-     CREAR USUARIO
+     CREAR USUARIO (CORREGIDO)
   ====================================================== */
   router.post(
     '/',
@@ -72,9 +72,17 @@ module.exports = (pool) => {
             ? Number(req.user.office_id)
             : Number(office_id);
 
+        // 🔴 VALIDACIÓN BASE
         if (!finalOfficeId || !name || !email || !password) {
           return res.status(400).json({
             message: 'office_id, name, email y password son obligatorios'
+          });
+        }
+
+        // 🔐 VALIDACIÓN DE SEGURIDAD
+        if (password.length < 6) {
+          return res.status(400).json({
+            message: 'La contraseña debe tener al menos 6 caracteres'
           });
         }
 
@@ -98,19 +106,8 @@ module.exports = (pool) => {
           });
         }
 
-        console.log('BODY CREATE USER =>', req.body);
-        console.log('FINAL OFFICE ID =>', finalOfficeId);
-        console.log('NORMALIZED NAME =>', normalizedName);
-        console.log('NORMALIZED EMAIL =>', normalizedEmail);
-        console.log('USERNAME =>', username);
-        console.log('NORMALIZED ROLE =>', normalizedRole);
-        console.log('STATUS =>', status ?? 1);
-
         const [officeRows] = await pool.query(
-          `SELECT id
-           FROM offices
-           WHERE id = ?
-           LIMIT 1`,
+          `SELECT id FROM offices WHERE id = ? LIMIT 1`,
           [finalOfficeId]
         );
 
@@ -134,6 +131,7 @@ module.exports = (pool) => {
           });
         }
 
+        // 🔥 AQUÍ ESTÁ LO IMPORTANTE: PASSWORD MANUAL
         const password_hash = await bcrypt.hash(password, 10);
 
         const [result] = await pool.query(
@@ -157,11 +155,6 @@ module.exports = (pool) => {
         });
       } catch (err) {
         console.error('CREATE OFFICE USER ERROR:', err);
-        console.error('SQL MESSAGE =>', err.sqlMessage);
-        console.error('SQL CODE =>', err.code);
-        console.error('SQL ERRNO =>', err.errno);
-        console.error('SQL =>', err.sql);
-
         return res.status(500).json({
           message: 'Error interno al crear usuario'
         });
@@ -188,10 +181,7 @@ module.exports = (pool) => {
         }
 
         const [userRows] = await pool.query(
-          `SELECT id, office_id
-           FROM office_users
-           WHERE id = ?
-           LIMIT 1`,
+          `SELECT id, office_id FROM office_users WHERE id = ? LIMIT 1`,
           [id]
         );
 
@@ -225,10 +215,7 @@ module.exports = (pool) => {
         const normalizedEmail = String(email).trim().toLowerCase();
 
         const [exists] = await pool.query(
-          `SELECT id
-           FROM office_users
-           WHERE email = ? AND id <> ?
-           LIMIT 1`,
+          `SELECT id FROM office_users WHERE email = ? AND id <> ? LIMIT 1`,
           [normalizedEmail, id]
         );
 
@@ -238,14 +225,9 @@ module.exports = (pool) => {
           });
         }
 
-        const [result] = await pool.query(
+        await pool.query(
           `UPDATE office_users
-           SET
-             name = ?,
-             email = ?,
-             role = ?,
-             status = ?,
-             updated_at = NOW()
+           SET name = ?, email = ?, role = ?, status = ?, updated_at = NOW()
            WHERE id = ?`,
           [
             normalizedName,
@@ -256,218 +238,11 @@ module.exports = (pool) => {
           ]
         );
 
-        if (result.affectedRows === 0) {
-          return res.status(404).json({ message: 'Usuario no encontrado' });
-        }
-
         return res.json({ message: 'Usuario actualizado correctamente' });
       } catch (err) {
         console.error('UPDATE OFFICE USER ERROR:', err);
-        console.error('SQL MESSAGE =>', err.sqlMessage);
-        console.error('SQL CODE =>', err.code);
-        console.error('SQL ERRNO =>', err.errno);
-        console.error('SQL =>', err.sql);
-
         return res.status(500).json({
           message: 'Error interno al actualizar usuario'
-        });
-      }
-    }
-  );
-
-  /* ======================================================
-     CAMBIAR ESTADO
-  ====================================================== */
-  router.put(
-    '/:id/status',
-    authenticateToken,
-    allowRoles('MASTER', 'OFFICE_ADMIN'),
-    async (req, res) => {
-      try {
-        const { id } = req.params;
-        const { status } = req.body || {};
-
-        if (status !== 0 && status !== 1) {
-          return res.status(400).json({ message: 'status debe ser 0 o 1' });
-        }
-
-        const [userRows] = await pool.query(
-          `SELECT id, office_id
-           FROM office_users
-           WHERE id = ?
-           LIMIT 1`,
-          [id]
-        );
-
-        if (!userRows.length) {
-          return res.status(404).json({ message: 'Usuario no encontrado' });
-        }
-
-        const officeUser = userRows[0];
-        const userRole = String(req.user.role || '').trim().toUpperCase();
-
-        if (
-          userRole === 'OFFICE_ADMIN' &&
-          Number(officeUser.office_id) !== Number(req.user.office_id)
-        ) {
-          return res.status(403).json({
-            message: 'No puedes cambiar el estado de este usuario'
-          });
-        }
-
-        const [result] = await pool.query(
-          `UPDATE office_users
-           SET
-             status = ?,
-             updated_at = NOW()
-           WHERE id = ?`,
-          [status, id]
-        );
-
-        if (result.affectedRows === 0) {
-          return res.status(404).json({ message: 'Usuario no encontrado' });
-        }
-
-        return res.json({ message: 'Estado actualizado correctamente' });
-      } catch (err) {
-        console.error('UPDATE OFFICE USER STATUS ERROR:', err);
-        console.error('SQL MESSAGE =>', err.sqlMessage);
-        console.error('SQL CODE =>', err.code);
-        console.error('SQL ERRNO =>', err.errno);
-        console.error('SQL =>', err.sql);
-
-        return res.status(500).json({
-          message: 'Error interno al actualizar estado'
-        });
-      }
-    }
-  );
-
-  /* ======================================================
-     CAMBIAR PASSWORD
-  ====================================================== */
-  router.put(
-    '/:id/password',
-    authenticateToken,
-    allowRoles('MASTER', 'OFFICE_ADMIN'),
-    async (req, res) => {
-      try {
-        const { id } = req.params;
-        const { password } = req.body || {};
-
-        if (!password) {
-          return res.status(400).json({ message: 'password es obligatorio' });
-        }
-
-        const [userRows] = await pool.query(
-          `SELECT id, office_id
-           FROM office_users
-           WHERE id = ?
-           LIMIT 1`,
-          [id]
-        );
-
-        if (!userRows.length) {
-          return res.status(404).json({ message: 'Usuario no encontrado' });
-        }
-
-        const officeUser = userRows[0];
-        const userRole = String(req.user.role || '').trim().toUpperCase();
-
-        if (
-          userRole === 'OFFICE_ADMIN' &&
-          Number(officeUser.office_id) !== Number(req.user.office_id)
-        ) {
-          return res.status(403).json({
-            message: 'No puedes cambiar la password de este usuario'
-          });
-        }
-
-        const password_hash = await bcrypt.hash(password, 10);
-
-        const [result] = await pool.query(
-          `UPDATE office_users
-           SET
-             password_hash = ?,
-             updated_at = NOW()
-           WHERE id = ?`,
-          [password_hash, id]
-        );
-
-        if (result.affectedRows === 0) {
-          return res.status(404).json({ message: 'Usuario no encontrado' });
-        }
-
-        return res.json({ message: 'Password actualizada correctamente' });
-      } catch (err) {
-        console.error('UPDATE OFFICE USER PASSWORD ERROR:', err);
-        console.error('SQL MESSAGE =>', err.sqlMessage);
-        console.error('SQL CODE =>', err.code);
-        console.error('SQL ERRNO =>', err.errno);
-        console.error('SQL =>', err.sql);
-
-        return res.status(500).json({
-          message: 'Error interno al actualizar password'
-        });
-      }
-    }
-  );
-
-  /* ======================================================
-     ELIMINAR USUARIO
-  ====================================================== */
-  router.delete(
-    '/:id',
-    authenticateToken,
-    allowRoles('MASTER', 'OFFICE_ADMIN'),
-    async (req, res) => {
-      try {
-        const { id } = req.params;
-
-        const [userRows] = await pool.query(
-          `SELECT id, office_id
-           FROM office_users
-           WHERE id = ?
-           LIMIT 1`,
-          [id]
-        );
-
-        if (!userRows.length) {
-          return res.status(404).json({ message: 'Usuario no encontrado' });
-        }
-
-        const officeUser = userRows[0];
-        const userRole = String(req.user.role || '').trim().toUpperCase();
-
-        if (
-          userRole === 'OFFICE_ADMIN' &&
-          Number(officeUser.office_id) !== Number(req.user.office_id)
-        ) {
-          return res.status(403).json({
-            message: 'No puedes eliminar este usuario'
-          });
-        }
-
-        const [result] = await pool.query(
-          `DELETE FROM office_users
-           WHERE id = ?`,
-          [id]
-        );
-
-        if (result.affectedRows === 0) {
-          return res.status(404).json({ message: 'Usuario no encontrado' });
-        }
-
-        return res.json({ message: 'Usuario eliminado correctamente' });
-      } catch (err) {
-        console.error('DELETE OFFICE USER ERROR:', err);
-        console.error('SQL MESSAGE =>', err.sqlMessage);
-        console.error('SQL CODE =>', err.code);
-        console.error('SQL ERRNO =>', err.errno);
-        console.error('SQL =>', err.sql);
-
-        return res.status(500).json({
-          message: 'Error interno al eliminar usuario'
         });
       }
     }

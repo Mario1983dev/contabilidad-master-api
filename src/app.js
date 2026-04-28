@@ -4,6 +4,7 @@ const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const path = require('path');
 
 const officeUsersRoutes = require('./routes/office-users.routes');
 const officesRoutesFactory = require('./routes/offices.routes');
@@ -11,263 +12,143 @@ const companiesRoutes = require('./routes/companies.routes');
 const accountsRoutes = require('./routes/accounts.routes');
 const journalEntriesRoutes = require('./routes/journal-entries.routes');
 const configurationRoutes = require('./routes/configuration.routes');
-
-// 🔥 NUEVO: LIBRO MAYOR
 const ledgerRoutes = require('./routes/ledger.routes');
+const trialBalanceRoutes = require('./routes/trial-balance.routes');
 
 const { authenticateToken, allowRoles } = require('./middlewares/auth.middleware');
 const pool = require('./db');
 
 const app = express();
 
-/* ======================================================
-   MIDDLEWARE BASE
-====================================================== */
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-/* ======================================================
-   ROOT
-====================================================== */
-app.get('/', (req, res) => {
-  res.json({ message: 'Contabilidad Master API funcionando' });
-});
-
-/* ======================================================
-   HELPERS LOGIN
-====================================================== */
 async function findMasterUserByEmail(email) {
-  try {
-    const [rows] = await pool.query(
-      `SELECT id, username, email, password_hash, is_active
-       FROM master_users
-       WHERE email = ?
-       LIMIT 1`,
-      [email]
-    );
-
-    return rows.length > 0 ? rows[0] : null;
-  } catch {
-    const [rows] = await pool.query(
-      `SELECT id, email, password_hash, is_active
-       FROM master_users
-       WHERE email = ?
-       LIMIT 1`,
-      [email]
-    );
-
-    return rows.length > 0 ? rows[0] : null;
-  }
-}
-
-async function findOfficeAdminByUsername(username) {
   const [rows] = await pool.query(
-    `SELECT id, office_id, username, email, password_hash, is_active
-     FROM office_admins
-     WHERE username = ?
+    `SELECT id, email, password_hash, is_active
+     FROM master_users
+     WHERE LOWER(email) = LOWER(?)
      LIMIT 1`,
-    [username]
+    [email]
   );
 
   return rows.length > 0 ? rows[0] : null;
 }
 
-async function findOfficeUserByUsername(username) {
+async function findOfficeUserByEmail(email) {
   const [rows] = await pool.query(
-    `SELECT id, office_id, username, name, email, password_hash
+    `SELECT id, office_id, username, name, email, password_hash, role, status
      FROM office_users
-     WHERE username = ?
+     WHERE LOWER(email) = LOWER(?)
      LIMIT 1`,
-    [username]
+    [email]
   );
 
   return rows.length > 0 ? rows[0] : null;
 }
 
-/* ======================================================
-   LOGIN GENERAL
-====================================================== */
 app.post('/api/login', async (req, res) => {
   try {
-    const { email, username, usernameOrEmail, password } = req.body || {};
+    const { email, password } = req.body || {};
+    const cleanEmail = String(email || '').trim().toLowerCase();
 
-    const rawLogin = String(
-      usernameOrEmail || email || username || ''
-    ).trim();
-
-    if (!rawLogin || !password) {
+    if (!cleanEmail || !password) {
       return res.status(400).json({
-        message: 'Usuario/email y password son obligatorios'
+        message: 'Email y password son obligatorios'
       });
     }
 
-    const isEmailLogin = rawLogin.includes('@');
+    let user = await findMasterUserByEmail(cleanEmail);
+    let isMaster = true;
 
-    // MASTER
-    if (isEmailLogin) {
-      const masterUser = await findMasterUserByEmail(rawLogin);
-
-      if (!masterUser) {
-        return res.status(401).json({ message: 'Credenciales inválidas' });
-      }
-
-      if (!Number(masterUser.is_active)) {
-        return res.status(403).json({ message: 'Usuario inactivo' });
-      }
-
-      const ok = bcrypt.compareSync(
-        password,
-        String(masterUser.password_hash).trim()
-      );
-
-      if (!ok) {
-        return res.status(401).json({ message: 'Credenciales inválidas' });
-      }
-
-      const token = jwt.sign(
-        {
-          id: masterUser.id,
-          username: masterUser.username || null,
-          email: masterUser.email,
-          role: 'MASTER',
-          scope: 'master'
-        },
-        process.env.JWT_SECRET,
-        { expiresIn: '8h' }
-      );
-
-      return res.json({
-        token,
-        user: {
-          id: masterUser.id,
-          username: masterUser.username || null,
-          email: masterUser.email,
-          role: 'MASTER',
-          scope: 'master'
-        }
-      });
+    if (!user) {
+      user = await findOfficeUserByEmail(cleanEmail);
+      isMaster = false;
     }
 
-    // OFFICE ADMIN
-    const officeAdmin = await findOfficeAdminByUsername(rawLogin);
-
-    if (officeAdmin) {
-      if (!Number(officeAdmin.is_active)) {
-        return res.status(403).json({ message: 'Usuario inactivo' });
-      }
-
-      const ok = bcrypt.compareSync(
-        password,
-        String(officeAdmin.password_hash).trim()
-      );
-
-      if (!ok) {
-        return res.status(401).json({ message: 'Credenciales inválidas' });
-      }
-
-      const token = jwt.sign(
-        {
-          id: officeAdmin.id,
-          office_id: officeAdmin.office_id,
-          username: officeAdmin.username,
-          email: officeAdmin.email,
-          role: 'OFFICE_ADMIN',
-          scope: 'office_admin'
-        },
-        process.env.JWT_SECRET,
-        { expiresIn: '8h' }
-      );
-
-      return res.json({
-        token,
-        user: {
-          id: officeAdmin.id,
-          office_id: officeAdmin.office_id,
-          username: officeAdmin.username,
-          email: officeAdmin.email,
-          role: 'OFFICE_ADMIN',
-          scope: 'office_admin'
-        }
-      });
+    if (!user) {
+      return res.status(401).json({ message: 'Credenciales inválidas' });
     }
 
-    // OFFICE USER
-    const officeUser = await findOfficeUserByUsername(rawLogin);
-
-    if (officeUser) {
-      const ok = bcrypt.compareSync(
-        password,
-        String(officeUser.password_hash).trim()
-      );
-
-      if (!ok) {
-        return res.status(401).json({ message: 'Credenciales inválidas' });
-      }
-
-      const token = jwt.sign(
-        {
-          id: officeUser.id,
-          office_id: officeUser.office_id,
-          username: officeUser.username,
-          email: officeUser.email,
-          role: 'OFFICE_USER',
-          scope: 'office_user'
-        },
-        process.env.JWT_SECRET,
-        { expiresIn: '8h' }
-      );
-
-      return res.json({
-        token,
-        user: {
-          id: officeUser.id,
-          office_id: officeUser.office_id,
-          username: officeUser.username,
-          name: officeUser.name,
-          email: officeUser.email,
-          role: 'OFFICE_USER',
-          scope: 'office_user'
-        }
-      });
+    if (isMaster && !Number(user.is_active)) {
+      return res.status(403).json({ message: 'Usuario inactivo' });
     }
 
-    return res.status(401).json({ message: 'Credenciales inválidas' });
+    if (!isMaster && Number(user.status) !== 1) {
+      return res.status(403).json({ message: 'Usuario inactivo' });
+    }
+
+    const ok = bcrypt.compareSync(
+      password,
+      String(user.password_hash || '').trim()
+    );
+
+    if (!ok) {
+      return res.status(401).json({ message: 'Credenciales inválidas' });
+    }
+
+    let role = 'MASTER';
+    let scope = 'master';
+
+    if (!isMaster) {
+      role = String(user.role || 'OFFICE_USER').trim().toUpperCase();
+      scope = role === 'OFFICE_ADMIN' ? 'office_admin' : 'office_user';
+    }
+
+    const tokenPayload = {
+      id: user.id,
+      email: user.email,
+      role,
+      scope
+    };
+
+    if (!isMaster) {
+      tokenPayload.office_id = user.office_id;
+      tokenPayload.username = user.username;
+      tokenPayload.name = user.name;
+    }
+
+    const token = jwt.sign(
+      tokenPayload,
+      process.env.JWT_SECRET,
+      { expiresIn: '8h' }
+    );
+
+    return res.json({
+      token,
+      user: {
+        id: user.id,
+        office_id: isMaster ? null : user.office_id,
+        username: isMaster ? null : user.username,
+        name: isMaster ? null : user.name,
+        email: user.email,
+        role,
+        scope
+      }
+    });
+
   } catch (err) {
     console.error('LOGIN ERROR:', err);
     return res.status(500).json({ message: 'Error interno del servidor' });
   }
 });
 
-/* ======================================================
-   ROUTES PROTEGIDAS
-====================================================== */
 const companiesRouter = companiesRoutes(pool);
 const officeUsersRouter = officeUsersRoutes(pool);
 const accountsRouter = accountsRoutes(pool);
 const journalEntriesRouter = journalEntriesRoutes(pool, authenticateToken);
 const configurationRouter = configurationRoutes(pool);
 
-// sin /api
-app.use('/companies', companiesRouter);
-app.use('/office-users', officeUsersRouter);
-app.use('/accounts', accountsRouter);
-app.use('/journal-entries', journalEntriesRouter);
-app.use('/configuration', configurationRouter);
-
-// con /api
 app.use('/api/companies', companiesRouter);
 app.use('/api/office-users', officeUsersRouter);
 app.use('/api/accounts', accountsRouter);
 app.use('/api/journal-entries', journalEntriesRouter);
 app.use('/api/configuration', configurationRouter);
 
-// 🔥 LIBRO MAYOR
 app.use('/api', ledgerRoutes);
+app.use('/api/reports', trialBalanceRoutes);
 
-/* ======================================================
-   MASTER ONLY
-====================================================== */
 app.use(
   '/api/master/offices',
   authenticateToken,
@@ -275,16 +156,12 @@ app.use(
   officesRoutesFactory(pool)
 );
 
-/* ======================================================
-   404
-====================================================== */
-app.use((req, res) => {
-  res.status(404).json({ message: 'Ruta no encontrada' });
+app.use(express.static(path.join(__dirname, '../public')));
+
+app.get(/.*/, (req, res) => {
+  res.sendFile(path.join(__dirname, '../public/index.html'));
 });
 
-/* ======================================================
-   SERVER
-====================================================== */
 const PORT = Number(process.env.PORT) || 3000;
 
 app.listen(PORT, () => {

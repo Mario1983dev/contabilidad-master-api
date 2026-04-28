@@ -4,18 +4,6 @@ const bcrypt = require('bcryptjs');
 module.exports = (pool) => {
   const router = express.Router();
 
-  function generarClaveTemporal() {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$';
-    let pass = '';
-    for (let i = 0; i < 8; i++) {
-      pass += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return pass;
-  }
-
-  /* ======================================================
-     LISTAR
-  ====================================================== */
   router.get('/', async (req, res) => {
     try {
       const [rows] = await pool.query(
@@ -24,86 +12,128 @@ module.exports = (pool) => {
          ORDER BY id DESC`
       );
 
-      res.json(rows);
+      return res.json(rows);
     } catch (err) {
       console.error('LIST OFFICES ERROR:', err);
-      res.status(500).json({ message: 'Error interno' });
+      return res.status(500).json({ message: 'Error interno' });
     }
   });
 
-  /* ======================================================
-     CREAR
-  ====================================================== */
   router.post('/', async (req, res) => {
+    const conn = await pool.getConnection();
+
     try {
-      const { rut, name, legal_name, email, phone, status } = req.body || {};
+      await conn.beginTransaction();
+
+      const {
+        rut,
+        name,
+        legal_name,
+        email,
+        phone,
+        status,
+        admin_username,
+        admin_name,
+        admin_email,
+        admin_password
+      } = req.body || {};
 
       if (!rut || !name) {
+        await conn.rollback();
         return res.status(400).json({
           message: 'rut y name son obligatorios'
         });
       }
 
-      const [result] = await pool.query(
-        `INSERT INTO offices (rut, name, legal_name, email, phone, status)
+      if (!admin_name || !admin_email || !admin_password) {
+        await conn.rollback();
+        return res.status(400).json({
+          message: 'Nombre, correo y contraseña del administrador son obligatorios'
+        });
+      }
+
+      if (String(admin_password).trim().length < 6) {
+        await conn.rollback();
+        return res.status(400).json({
+          message: 'La contraseña debe tener al menos 6 caracteres'
+        });
+      }
+
+      const normalizedRut = String(rut).trim();
+      const normalizedName = String(name).trim();
+      const normalizedAdminName = String(admin_name).trim();
+      const normalizedAdminEmail = String(admin_email).trim().toLowerCase();
+
+      const normalizedAdminUsername = String(
+        admin_username || admin_name
+      )
+        .trim()
+        .toLowerCase();
+
+      const [officeResult] = await conn.query(
+        `INSERT INTO offices
+         (rut, name, legal_name, email, phone, status)
          VALUES (?, ?, ?, ?, ?, ?)`,
         [
-          rut.trim(),
-          name.trim(),
-          legal_name ?? null,
-          email ?? null,
-          phone ?? null,
+          normalizedRut,
+          normalizedName,
+          legal_name || null,
+          email || null,
+          phone || null,
           status ?? 1
         ]
       );
 
-      const officeId = result.insertId;
+      const officeId = officeResult.insertId;
+      const passwordHash = await bcrypt.hash(String(admin_password).trim(), 10);
 
-      /* ======================================================
-         CREAR ADMIN DE OFICINA
-      ====================================================== */
-      const tempPassword = generarClaveTemporal();
-      const passwordHash = await bcrypt.hash(tempPassword, 10);
-
-      const adminUser = `admin${officeId}`;
-      const adminEmail = `${adminUser}@admin.local`;
-
-      await pool.query(
-        `INSERT INTO office_admins (office_id, email, username, password_hash, is_active)
-         VALUES (?, ?, ?, ?, 1)`,
-        [officeId, adminEmail, adminUser, passwordHash]
+      await conn.query(
+        `INSERT INTO office_users
+         (office_id, username, name, email, password_hash, role, status)
+         VALUES (?, ?, ?, ?, ?, 'OFFICE_ADMIN', 1)`,
+        [
+          officeId,
+          normalizedAdminUsername,
+          normalizedAdminName,
+          normalizedAdminEmail,
+          passwordHash
+        ]
       );
 
-      res.status(201).json({
-        message: 'Oficina creada correctamente',
+      await conn.commit();
+
+      return res.status(201).json({
+        message: 'Oficina y administrador creados correctamente',
         id: officeId,
-        admin_user: adminUser,
-        temp_password: tempPassword
+        office_id: officeId,
+        admin_username: normalizedAdminUsername,
+        admin_email: normalizedAdminEmail
       });
     } catch (err) {
-      console.error('CREATE OFFICE ERROR:', err);
+      await conn.rollback();
+
+      console.error('CREATE OFFICE + ADMIN ERROR:', err);
 
       if (err.code === 'ER_DUP_ENTRY') {
         return res.status(409).json({
-          message: 'RUT ya existe'
+          message: 'RUT, usuario o correo ya existe'
         });
       }
 
-      res.status(500).json({ message: 'Error interno' });
+      return res.status(500).json({
+        message: 'Error interno al crear oficina y administrador'
+      });
+    } finally {
+      conn.release();
     }
   });
 
-  /* ======================================================
-     OBTENER UNA
-  ====================================================== */
   router.get('/:id', async (req, res) => {
     try {
       const id = Number(req.params.id);
 
       if (!id) {
-        return res.status(400).json({
-          message: 'ID inválido'
-        });
+        return res.status(400).json({ message: 'ID inválido' });
       }
 
       const [rows] = await pool.query(
@@ -114,29 +144,22 @@ module.exports = (pool) => {
       );
 
       if (!rows.length) {
-        return res.status(404).json({
-          message: 'No encontrada'
-        });
+        return res.status(404).json({ message: 'No encontrada' });
       }
 
-      res.json(rows[0]);
+      return res.json(rows[0]);
     } catch (err) {
       console.error('GET OFFICE ERROR:', err);
-      res.status(500).json({ message: 'Error interno' });
+      return res.status(500).json({ message: 'Error interno' });
     }
   });
 
-  /* ======================================================
-     ACTUALIZAR
-  ====================================================== */
   router.put('/:id', async (req, res) => {
     try {
       const id = Number(req.params.id);
 
       if (!id) {
-        return res.status(400).json({
-          message: 'ID inválido'
-        });
+        return res.status(400).json({ message: 'ID inválido' });
       }
 
       const { rut, name, legal_name, email, phone, status } = req.body || {};
@@ -152,56 +175,43 @@ module.exports = (pool) => {
          SET rut = ?, name = ?, legal_name = ?, email = ?, phone = ?, status = ?
          WHERE id = ?`,
         [
-          rut.trim(),
-          name.trim(),
-          legal_name ?? null,
-          email ?? null,
-          phone ?? null,
+          String(rut).trim(),
+          String(name).trim(),
+          legal_name || null,
+          email || null,
+          phone || null,
           status ?? 1,
           id
         ]
       );
 
       if (result.affectedRows === 0) {
-        return res.status(404).json({
-          message: 'No encontrada'
-        });
+        return res.status(404).json({ message: 'No encontrada' });
       }
 
-      res.json({
-        message: 'Actualizada correctamente'
-      });
+      return res.json({ message: 'Actualizada correctamente' });
     } catch (err) {
       console.error('UPDATE OFFICE ERROR:', err);
 
       if (err.code === 'ER_DUP_ENTRY') {
-        return res.status(409).json({
-          message: 'RUT ya existe'
-        });
+        return res.status(409).json({ message: 'RUT ya existe' });
       }
 
-      res.status(500).json({ message: 'Error interno' });
+      return res.status(500).json({ message: 'Error interno' });
     }
   });
 
-  /* ======================================================
-     CAMBIAR ESTADO
-  ====================================================== */
   router.put('/:id/status', async (req, res) => {
     try {
       const id = Number(req.params.id);
       const { status } = req.body || {};
 
       if (!id) {
-        return res.status(400).json({
-          message: 'ID inválido'
-        });
+        return res.status(400).json({ message: 'ID inválido' });
       }
 
       if (status !== 0 && status !== 1) {
-        return res.status(400).json({
-          message: 'Status inválido'
-        });
+        return res.status(400).json({ message: 'Status inválido' });
       }
 
       const [result] = await pool.query(
@@ -212,33 +222,27 @@ module.exports = (pool) => {
       );
 
       if (result.affectedRows === 0) {
-        return res.status(404).json({
-          message: 'No encontrada'
-        });
+        return res.status(404).json({ message: 'No encontrada' });
       }
 
-      res.json({
-        message: status === 1
-          ? 'Oficina activada correctamente'
-          : 'Oficina desactivada correctamente'
+      return res.json({
+        message:
+          status === 1
+            ? 'Oficina activada correctamente'
+            : 'Oficina desactivada correctamente'
       });
     } catch (err) {
       console.error('CHANGE STATUS OFFICE ERROR:', err);
-      res.status(500).json({ message: 'Error interno' });
+      return res.status(500).json({ message: 'Error interno' });
     }
   });
 
-  /* ======================================================
-     ELIMINAR (SOFT DELETE)
-  ====================================================== */
   router.delete('/:id', async (req, res) => {
     try {
       const id = Number(req.params.id);
 
       if (!id) {
-        return res.status(400).json({
-          message: 'ID inválido'
-        });
+        return res.status(400).json({ message: 'ID inválido' });
       }
 
       const [result] = await pool.query(
@@ -249,17 +253,13 @@ module.exports = (pool) => {
       );
 
       if (result.affectedRows === 0) {
-        return res.status(404).json({
-          message: 'No encontrada'
-        });
+        return res.status(404).json({ message: 'No encontrada' });
       }
 
-      res.json({
-        message: 'Oficina desactivada correctamente'
-      });
+      return res.json({ message: 'Oficina desactivada correctamente' });
     } catch (err) {
       console.error('DELETE OFFICE ERROR:', err);
-      res.status(500).json({ message: 'Error interno' });
+      return res.status(500).json({ message: 'Error interno' });
     }
   });
 
