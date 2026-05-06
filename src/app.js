@@ -20,10 +20,35 @@ const pool = require('./db');
 
 const app = express();
 
+app.set('etag', false);
+
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+app.use('/api', (req, res, next) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+  next();
+});
+
+function resolveRoutes(routeModule) {
+  const mod = routeModule && routeModule.default ? routeModule.default : routeModule;
+
+  if (mod && typeof mod.use === 'function') {
+    return mod;
+  }
+
+  if (typeof mod === 'function') {
+    return mod(pool, authenticateToken, allowRoles);
+  }
+
+  console.error('Ruta inválida exportada:', mod);
+  throw new Error('La ruta no exporta un router válido');
+}
+
+// ✅ CORREGIDO (sin duplicación)
 async function findMasterUserByEmail(email) {
   const [rows] = await pool.query(
     `SELECT id, email, password_hash, is_active
@@ -50,13 +75,11 @@ async function findOfficeUserByEmail(email) {
 
 app.post('/api/login', async (req, res) => {
   try {
-    const { email, password } = req.body || {};
-    const cleanEmail = String(email || '').trim().toLowerCase();
+    const { email, usernameOrEmail, password } = req.body || {};
+    const cleanEmail = String(email || usernameOrEmail || '').trim().toLowerCase();
 
     if (!cleanEmail || !password) {
-      return res.status(400).json({
-        message: 'Email y password son obligatorios'
-      });
+      return res.status(400).json({ message: 'Email y password son obligatorios' });
     }
 
     let user = await findMasterUserByEmail(cleanEmail);
@@ -79,10 +102,7 @@ app.post('/api/login', async (req, res) => {
       return res.status(403).json({ message: 'Usuario inactivo' });
     }
 
-    const ok = bcrypt.compareSync(
-      password,
-      String(user.password_hash || '').trim()
-    );
+    const ok = bcrypt.compareSync(password, String(user.password_hash || '').trim());
 
     if (!ok) {
       return res.status(401).json({ message: 'Credenciales inválidas' });
@@ -109,11 +129,7 @@ app.post('/api/login', async (req, res) => {
       tokenPayload.name = user.name;
     }
 
-    const token = jwt.sign(
-      tokenPayload,
-      process.env.JWT_SECRET,
-      { expiresIn: '8h' }
-    );
+    const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, { expiresIn: '8h' });
 
     return res.json({
       token,
@@ -127,27 +143,24 @@ app.post('/api/login', async (req, res) => {
         scope
       }
     });
-
   } catch (err) {
     console.error('LOGIN ERROR:', err);
     return res.status(500).json({ message: 'Error interno del servidor' });
   }
 });
 
-const companiesRouter = companiesRoutes(pool);
-const officeUsersRouter = officeUsersRoutes(pool);
-const accountsRouter = accountsRoutes(pool);
-const journalEntriesRouter = journalEntriesRoutes(pool, authenticateToken);
-const configurationRouter = configurationRoutes(pool);
+app.use('/api/companies', resolveRoutes(companiesRoutes));
+app.use('/api/office-users', resolveRoutes(officeUsersRoutes));
+app.use('/api/accounts', resolveRoutes(accountsRoutes));
+app.use('/api/journal-entries', journalEntriesRoutes(pool, authenticateToken));
+app.use('/api/configuration', resolveRoutes(configurationRoutes));
 
-app.use('/api/companies', companiesRouter);
-app.use('/api/office-users', officeUsersRouter);
-app.use('/api/accounts', accountsRouter);
-app.use('/api/journal-entries', journalEntriesRouter);
-app.use('/api/configuration', configurationRouter);
+app.use('/api/trial-balance', resolveRoutes(trialBalanceRoutes));
+app.use('/api/ledger', resolveRoutes(ledgerRoutes));
 
-app.use('/api', ledgerRoutes);
-app.use('/api/reports', trialBalanceRoutes);
+app.get('/api/test-pdf', (req, res) => {
+  res.send('PDF TEST OK');
+});
 
 app.use(
   '/api/master/offices',
@@ -155,6 +168,13 @@ app.use(
   allowRoles('MASTER'),
   officesRoutesFactory(pool)
 );
+
+app.use('/api', (req, res) => {
+  return res.status(404).json({
+    message: 'Ruta API no encontrada',
+    path: req.originalUrl
+  });
+});
 
 app.use(express.static(path.join(__dirname, '../public')));
 

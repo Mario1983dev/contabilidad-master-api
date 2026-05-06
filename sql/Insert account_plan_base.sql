@@ -25,3 +25,17 @@ INSERT INTO account_plan_base VALUES ('4010220', 'COSTO DE VENTA', 'ACTIVO', 'DE
 INSERT INTO account_plan_base VALUES ('4010815', 'ARRIENDOS', 'ACTIVO', 'DEBITO', NULL, 1, 1, 1, 190, 'Extraido de imagen enviada por usuario', '2026-03-08 15:50:25', '2026-03-08 15:50:25');
 INSERT INTO account_plan_base VALUES ('4010810', 'SUELDOS', 'ACTIVO', 'DEBITO', NULL, 1, 1, 1, 200, 'Extraido de imagen enviada por usuario', '2026-03-08 15:50:25', '2026-03-08 15:50:25');
 INSERT INTO account_plan_base VALUES ('4010822', 'HONORARIOS', 'ACTIVO', 'DEBITO', NULL, 1, 1, 1, 210, 'Extraido de imagen enviada por usuario', '2026-03-08 15:50:25', '2026-03-08 15:50:25');
+
+INSERT INTO entry_types 
+(code, name, description, affects_balance, is_system, created_at)
+VALUES
+('MANUAL', 'Manual', 'Asiento manual general', 1, 1, NOW()),
+('APERTURA', 'Apertura', 'Asiento de apertura de periodo', 1, 1, NOW()),
+('AJUSTE', 'Ajuste', 'Ajuste contable', 1, 1, NOW()),
+('REAPERTURA', 'Reapertura', 'Reapertura de periodo', 1, 1, NOW());
+
+CREATE INDEX idx_jel_entry_account
+ON journal_entry_lines (entry_id, account_id);
+
+CREATE INDEX idx_ca_company
+ON company_accounts (company_id);
