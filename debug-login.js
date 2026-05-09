@@ -3,9 +3,6 @@ const mysql = require('mysql2/promise');
 
 (async () => {
   try {
-    console.log("ENV DB_HOST:", process.env.DB_HOST);
-    console.log("ENV DB_USER:", process.env.DB_USER);
-    console.log("ENV DB_NAME:", process.env.DB_NAME);
 
     const conn = await mysql.createConnection({
       host: process.env.DB_HOST,
@@ -21,7 +18,7 @@ const mysql = require('mysql2/promise');
       [email]
     );
 
-    console.log("ROW:", rows);
+
 
     await conn.end();
   } catch (e) {

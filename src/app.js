@@ -14,7 +14,7 @@ const journalEntriesRoutes = require('./routes/journal-entries.routes');
 const configurationRoutes = require('./routes/configuration.routes');
 const ledgerRoutes = require('./routes/ledger.routes');
 const trialBalanceRoutes = require('./routes/trial-balance.routes');
-
+const siiRoutes = require('./routes/sii.routes');
 const { authenticateToken, allowRoles } = require('./middlewares/auth.middleware');
 const pool = require('./db');
 
@@ -25,7 +25,7 @@ app.set('etag', false);
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
+app.use('/api/sii', siiRoutes);
 app.use('/api', (req, res, next) => {
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.set('Pragma', 'no-cache');
@@ -183,7 +183,7 @@ app.get(/.*/, (req, res) => {
 });
 
 const PORT = Number(process.env.PORT) || 3000;
-
+ console.log(`API corriendo en puerto ${PORT}`);
 app.listen(PORT, () => {
-  console.log(`Master API corriendo en puerto ${PORT}`);
+ 
 });

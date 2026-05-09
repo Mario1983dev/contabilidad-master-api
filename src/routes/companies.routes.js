@@ -1,4 +1,4 @@
-console.log('>>> CARGANDO companies.routes.js');
+
 
 const express = require('express');
 const {
@@ -20,8 +20,7 @@ module.exports = (pool) => {
     allowRoles('MASTER', 'OFFICE_ADMIN', 'OFFICE_USER'),
     async (req, res) => {
       try {
-        console.log('>>> ENTRANDO AL LISTADO DE EMPRESAS');
-        console.log('REQ.USER =>', req.user);
+ 
 
         let sql = `
           SELECT
@@ -54,12 +53,12 @@ module.exports = (pool) => {
         const params = [];
         const userRole = String(req.user?.role || '').trim().toUpperCase();
 
-        console.log('USER ROLE =>', userRole);
+       
 
         if (userRole === 'OFFICE_ADMIN' || userRole === 'OFFICE_USER') {
           const officeId = Number(req.user?.office_id);
 
-          console.log('OFFICE ID DESDE TOKEN =>', officeId);
+          
 
           if (!officeId || Number.isNaN(officeId)) {
             console.error('LIST COMPANIES ERROR: office_id inválido en token', req.user);
@@ -73,7 +72,7 @@ module.exports = (pool) => {
         } else if (req.query.office_id) {
           const officeId = Number(req.query.office_id);
 
-          console.log('OFFICE ID DESDE QUERY =>', officeId);
+         
 
           if (!officeId || Number.isNaN(officeId)) {
             return res.status(400).json({
@@ -87,13 +86,11 @@ module.exports = (pool) => {
 
         sql += ` ORDER BY c.id DESC `;
 
-        console.log('SQL FINAL =>', sql);
-        console.log('PARAMS =>', params);
+      
 
         const [rows] = await pool.query(sql, params);
 
-        console.log('ROWS COMPANIES =>', rows);
-
+        
         return res.json(rows || []);
       } catch (err) {
         console.error('LIST COMPANIES ERROR:', err);

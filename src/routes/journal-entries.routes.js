@@ -1,9 +1,9 @@
-console.log('>>> CARGANDO journal-entries.routes.js');
+
 
 const express = require('express');
 
 module.exports = (pool, verifyToken) => {
-  console.log('>>> ENTRANDO AL EXPORT DE journal-entries.routes.js');
+ 
 
   const router = express.Router();
 

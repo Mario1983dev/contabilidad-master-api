@@ -4,7 +4,7 @@ const {
   authenticateToken,
   allowRoles
 } = require('../middlewares/auth.middleware');
-console.log('RUTA STATUS CARGADA');
+
 module.exports = (pool) => {
   const router = express.Router();
 
