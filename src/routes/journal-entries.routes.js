@@ -1,10 +1,6 @@
-
-
 const express = require('express');
 
 module.exports = (pool, verifyToken) => {
- 
-
   const router = express.Router();
 
   async function validateCompanyAccess(companyId, user) {
@@ -28,6 +24,47 @@ module.exports = (pool, verifyToken) => {
       [companyId, user.office_id]
     );
     return rows;
+  }
+
+  async function validateAccountingPeriod(companyId, entryDate) {
+    const year = Number(String(entryDate).substring(0, 4));
+
+    if (!year) {
+      return {
+        ok: false,
+        message: 'Fecha de asiento inválida'
+      };
+    }
+
+    const [rows] = await pool.query(
+      `SELECT id, year_num, status
+       FROM accounting_periods
+       WHERE company_id = ?
+         AND year_num = ?
+       LIMIT 1`,
+      [companyId, year]
+    );
+
+    if (rows.length === 0) {
+      return {
+        ok: false,
+        message: `No existe período contable para el año ${year}`
+      };
+    }
+
+    const period = rows[0];
+
+    if (period.status === 'CLOSED') {
+      return {
+        ok: false,
+        message: `El período contable ${year} está cerrado`
+      };
+    }
+
+    return {
+      ok: true,
+      period
+    };
   }
 
   async function validateAccountForCompany(companyId, accountId) {
@@ -156,8 +193,8 @@ module.exports = (pool, verifyToken) => {
       totalCredit
     };
   }
-  
-    // GET /journal-entries/report
+
+  // GET /journal-entries/report
   router.get('/report', verifyToken, async (req, res) => {
     try {
       const companyId = Number(req.query.company_id);
@@ -407,13 +444,23 @@ module.exports = (pool, verifyToken) => {
         });
       }
 
-      const linesValidation = await validateLines(lines, companyId, res);
-      if (!linesValidation) return;
-
       const targetDates = buildTargetDates(
         entry_date,
         Boolean(copy_until_december)
       );
+
+      for (const targetDate of targetDates) {
+        const periodValidation = await validateAccountingPeriod(companyId, targetDate);
+
+        if (!periodValidation.ok) {
+          return res.status(400).json({
+            message: periodValidation.message
+          });
+        }
+      }
+
+      const linesValidation = await validateLines(lines, companyId, res);
+      if (!linesValidation) return;
 
       conn = await pool.getConnection();
       await conn.beginTransaction();
@@ -540,6 +587,17 @@ module.exports = (pool, verifyToken) => {
         });
       }
 
+      const periodValidation = await validateAccountingPeriod(
+        Number(entry.company_id),
+        entry_date
+      );
+
+      if (!periodValidation.ok) {
+        return res.status(400).json({
+          message: periodValidation.message
+        });
+      }
+
       const linesValidation = await validateLines(lines, Number(entry.company_id), res);
       if (!linesValidation) return;
 
@@ -614,7 +672,7 @@ module.exports = (pool, verifyToken) => {
       }
 
       const [entryRows] = await pool.query(
-        `SELECT id, company_id, status
+        `SELECT id, company_id, status, entry_date
          FROM journal_entries
          WHERE id = ?
          LIMIT 1`,
@@ -633,6 +691,17 @@ module.exports = (pool, verifyToken) => {
       if (companyRows.length === 0) {
         return res.status(403).json({
           message: 'No tienes acceso a este asiento'
+        });
+      }
+
+      const periodValidation = await validateAccountingPeriod(
+        Number(entry.company_id),
+        entry.entry_date
+      );
+
+      if (!periodValidation.ok) {
+        return res.status(400).json({
+          message: periodValidation.message
         });
       }
 
