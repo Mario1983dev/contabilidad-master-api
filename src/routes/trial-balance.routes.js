@@ -54,29 +54,105 @@ async function getTrialBalanceRows(companyId, fromDate, toDate) {
   return rows;
 }
 
+function normalizeText(value) {
+  return String(value || '')
+    .toUpperCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+}
+
+function getAccountClassification(row) {
+  const code = String(row.account_code || '').trim();
+  const name = normalizeText(row.account_name);
+  const type = normalizeText(row.account_type);
+
+  /*
+    CORRECCIÓN MONETARIA:
+    Si el saldo es acreedor va a GANANCIA.
+    Si el saldo es deudor va a PÉRDIDA.
+  */
+  if (
+    code === '4012210' ||
+    name.includes('CORRECCION MONETARIA')
+  ) {
+    return 'RESULTADO_VARIABLE';
+  }
+
+  /*
+    CAPITAL / PATRIMONIO:
+    Siempre se presenta en PASIVO/PATRIMONIO.
+  */
+  if (
+    code.startsWith('3') ||
+    name.includes('CAPITAL') ||
+    type === 'PATRIMONIO' ||
+    type === 'RESULTADO'
+  ) {
+    return 'PASIVO';
+  }
+
+  if (type === 'ACTIVO') return 'ACTIVO';
+  if (type === 'PASIVO') return 'PASIVO';
+
+  if (
+    type === 'GASTO' ||
+    type === 'COSTO' ||
+    type === 'PERDIDA'
+  ) {
+    return 'PERDIDA';
+  }
+
+  if (
+    type === 'INGRESO' ||
+    type === 'GANANCIA'
+  ) {
+    return 'GANANCIA';
+  }
+
+  if (code.startsWith('1')) return 'ACTIVO';
+  if (code.startsWith('2')) return 'PASIVO';
+  if (code.startsWith('4')) return 'GANANCIA';
+  if (code.startsWith('5')) return 'PERDIDA';
+
+  return 'SIN_CLASIFICAR';
+}
+
 function mapBalanceRows(rows) {
   return rows.map((r) => {
     const debit = Number(r.debit || 0);
     const credit = Number(r.credit || 0);
     const saldo = debit - credit;
-    const type = String(r.account_type || '').toUpperCase();
+
+    const saldoDeudor = saldo > 0 ? saldo : 0;
+    const saldoAcreedor = saldo < 0 ? Math.abs(saldo) : 0;
+
+    const classification = getAccountClassification(r);
 
     const row = {
       ...r,
       debit,
       credit,
-      saldo_deudor: saldo > 0 ? saldo : 0,
-      saldo_acreedor: saldo < 0 ? Math.abs(saldo) : 0,
+      saldo_deudor: saldoDeudor,
+      saldo_acreedor: saldoAcreedor,
       activo: 0,
       pasivo: 0,
       perdida: 0,
       ganancia: 0
     };
 
-    if (type === 'ACTIVO') row.activo = row.saldo_deudor;
-    else if (type === 'PASIVO' || type === 'PATRIMONIO') row.pasivo = row.saldo_acreedor;
-    else if (type === 'GASTO') row.perdida = row.saldo_deudor;
-    else if (type === 'INGRESO') row.ganancia = row.saldo_acreedor;
+    if (classification === 'ACTIVO') {
+      row.activo = saldoDeudor;
+    } else if (classification === 'PASIVO') {
+      row.pasivo = saldoAcreedor;
+    } else if (classification === 'PERDIDA') {
+      row.perdida = saldoDeudor;
+    } else if (classification === 'GANANCIA') {
+      row.ganancia = saldoAcreedor;
+    } else if (classification === 'RESULTADO_VARIABLE') {
+      if (saldoDeudor > 0) row.perdida = saldoDeudor;
+      if (saldoAcreedor > 0) row.ganancia = saldoAcreedor;
+    }
 
     return row;
   });
@@ -186,24 +262,12 @@ router.get(
 
       doc.fontSize(5.3).font('Helvetica-Bold');
 
-      doc.text('SALDOS', cols.saldoD + 8, y - 12, {
-  align: 'center',
-  width: 95
-});
-
-doc.text('INVENTARIO', cols.activo + 8, y - 12, {
-  align: 'center',
-  width: 95
-});
-
-doc.text('RESULTADOS', cols.perdida + 8, y - 12, {
-  align: 'center',
-  width: 95
-});
+      doc.text('SALDOS', cols.saldoD + 8, y - 12, { align: 'center', width: 95 });
+      doc.text('INVENTARIO', cols.activo + 8, y - 12, { align: 'center', width: 95 });
+      doc.text('RESULTADOS', cols.perdida + 8, y - 12, { align: 'center', width: 95 });
 
       doc.text('CUENTA', cols.code, y);
       doc.text('NOMBRE DE CUENTA', cols.name, y);
-
       doc.text('DÉBITO', cols.debit, y, { align: 'right', width: numWidth });
       doc.text('CRÉDITO', cols.credit, y, { align: 'right', width: numWidth });
       doc.text('DEUDOR', cols.saldoD, y, { align: 'right', width: numWidth });
@@ -263,8 +327,7 @@ doc.text('RESULTADOS', cols.perdida + 8, y - 12, {
       y += 12;
       doc.font('Helvetica-Bold').fontSize(6);
 
-      doc.text('TOTALES', cols.name, y);
-
+      doc.text('SUMA', cols.name, y);
       doc.text(money(totals.debit), cols.debit, y, { align: 'right', width: numWidth });
       doc.text(money(totals.credit), cols.credit, y, { align: 'right', width: numWidth });
       doc.text(money(totals.saldoD), cols.saldoD, y, { align: 'right', width: numWidth });
@@ -274,21 +337,55 @@ doc.text('RESULTADOS', cols.perdida + 8, y - 12, {
       doc.text(money(totals.perdida), cols.perdida, y, { align: 'right', width: numWidth });
       doc.text(money(totals.ganancia), cols.ganancia, y, { align: 'right', width: numWidth });
 
+      y += 12;
+
+      const resultado = Math.abs(totals.ganancia - totals.perdida);
+
+      let resultadoActivo = 0;
+      let resultadoPasivo = 0;
+      let resultadoPerdida = 0;
+      let resultadoGanancia = 0;
+
+      if (totals.ganancia > totals.perdida) {
+        resultadoPasivo = resultado;
+        resultadoPerdida = resultado;
+      }
+
+      if (totals.perdida > totals.ganancia) {
+        resultadoActivo = resultado;
+        resultadoGanancia = resultado;
+      }
+
+      doc.text('RESULTADO DEL EJERCICIO', cols.name, y);
+      doc.text(money(resultadoActivo), cols.activo, y, { align: 'right', width: numWidth });
+      doc.text(money(resultadoPasivo), cols.pasivo, y, { align: 'right', width: numWidth });
+      doc.text(money(resultadoPerdida), cols.perdida, y, { align: 'right', width: numWidth });
+      doc.text(money(resultadoGanancia), cols.ganancia, y, { align: 'right', width: numWidth });
+
+      y += 12;
+
+      doc.text('TOTALES', cols.name, y);
+      doc.text(money(totals.debit), cols.debit, y, { align: 'right', width: numWidth });
+      doc.text(money(totals.credit), cols.credit, y, { align: 'right', width: numWidth });
+      doc.text(money(totals.saldoD), cols.saldoD, y, { align: 'right', width: numWidth });
+      doc.text(money(totals.saldoA), cols.saldoA, y, { align: 'right', width: numWidth });
+      doc.text(money(totals.activo + resultadoActivo), cols.activo, y, { align: 'right', width: numWidth });
+      doc.text(money(totals.pasivo + resultadoPasivo), cols.pasivo, y, { align: 'right', width: numWidth });
+      doc.text(money(totals.perdida), cols.perdida, y, { align: 'right', width: numWidth });
+      doc.text(money(totals.ganancia), cols.ganancia, y, { align: 'right', width: numWidth });
+
       y += 45;
 
       doc.font('Helvetica-Bold').fontSize(7);
       doc.text(
-  'Se deja expresa constancia, que la contabilidad y presente Balance fueron confeccionados con los datos entregados personalmente por el contribuyente, como fidedigno.',
-  left,
-  y,
-  {
-    width: right - left,
-    lineGap: 2
-  }
-);
+        'Se deja expresa constancia, que la contabilidad y presente Balance fueron confeccionados con los datos entregados personalmente por el contribuyente, como fidedigno.',
+        left,
+        y,
+        { width: right - left, lineGap: 2 }
+      );
 
-y += 24;
-doc.text('(Artículo 100 - Código Tributario)', left, y);
+      y += 24;
+      doc.text('(Artículo 100 - Código Tributario)', left, y);
 
       y += 80;
 

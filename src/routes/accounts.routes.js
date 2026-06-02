@@ -174,7 +174,15 @@ module.exports = (pool) => {
           : null;
         const cleanNotes = notes ? String(notes).trim() : '';
 
-        const validAccountTypes = ['ACTIVO', 'PASIVO', 'PATRIMONIO', 'INGRESO', 'GASTO'];
+        const validAccountTypes = [
+          'ACTIVO',
+          'PASIVO',
+          'PATRIMONIO',
+          'INGRESO',
+          'GASTO',
+          'RESULTADO'
+        ];
+
         const validBalanceNatures = ['DEBITO', 'CREDITO'];
 
         if (!validAccountTypes.includes(cleanAccountType)) {
