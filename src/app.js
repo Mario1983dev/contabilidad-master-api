@@ -17,6 +17,7 @@ const trialBalanceRoutes = require('./routes/trial-balance.routes');
 const siiRoutes = require('./routes/sii.routes');
 const exportRoutes = require('./routes/export.routes');
 const accountingPeriodsRoutes = require('./routes/accounting-periods.routes');
+const subscriptionsRoutes = require('./routes/subscriptions.routes');
 
 const { authenticateToken, allowRoles } = require('./middlewares/auth.middleware');
 
@@ -83,6 +84,31 @@ async function findOfficeUserByEmail(email) {
   return rows.length > 0 ? rows[0] : null;
 }
 
+async function findOfficeById(officeId) {
+  const [rows] = await pool.query(
+    `SELECT id, name, plan_id, subscription_status, subscription_end, is_suspended
+     FROM offices
+     WHERE id = ?
+     LIMIT 1`,
+    [officeId]
+  );
+
+  return rows.length > 0 ? rows[0] : null;
+}
+
+function isSubscriptionExpired(subscriptionEnd) {
+  if (!subscriptionEnd) {
+    return false;
+  }
+
+  const endDate = new Date(subscriptionEnd);
+  const today = new Date();
+
+  endDate.setHours(23, 59, 59, 999);
+
+  return endDate < today;
+}
+
 app.post('/api/login', async (req, res) => {
   try {
     const { email, usernameOrEmail, password } = req.body || {};
@@ -134,6 +160,37 @@ app.post('/api/login', async (req, res) => {
       return res.status(401).json({
         message: 'Credenciales inválidas'
       });
+    }
+
+    if (!isMaster) {
+      const office = await findOfficeById(user.office_id);
+
+      if (!office) {
+        return res.status(403).json({
+          message: 'Oficina no encontrada'
+        });
+      }
+
+      if (Number(office.is_suspended) === 1) {
+        return res.status(403).json({
+          message: 'La suscripción se encuentra suspendida'
+        });
+      }
+
+      if (
+        office.subscription_status &&
+        !['ACTIVE', 'BETA'].includes(String(office.subscription_status).toUpperCase())
+      ) {
+        return res.status(403).json({
+          message: 'La suscripción no se encuentra activa'
+        });
+      }
+
+      if (isSubscriptionExpired(office.subscription_end)) {
+        return res.status(403).json({
+          message: 'La suscripción ha vencido'
+        });
+      }
     }
 
     let role = 'MASTER';
@@ -234,6 +291,12 @@ app.use(
   authenticateToken,
   allowRoles('MASTER'),
   officesRoutesFactory(pool)
+);
+app.use(
+  '/api/master/subscriptions',
+  authenticateToken,
+  allowRoles('MASTER'),
+  subscriptionsRoutes(pool)
 );
 
 app.use('/api', (req, res) => {
