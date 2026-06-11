@@ -56,7 +56,7 @@ module.exports = (pool) => {
   );
 
   /* ======================================================
-     CREAR USUARIO (CORREGIDO)
+     CREAR USUARIO
   ====================================================== */
   router.post(
     '/',
@@ -72,14 +72,12 @@ module.exports = (pool) => {
             ? Number(req.user.office_id)
             : Number(office_id);
 
-        // 🔴 VALIDACIÓN BASE
         if (!finalOfficeId || !name || !email || !password) {
           return res.status(400).json({
             message: 'office_id, name, email y password son obligatorios'
           });
         }
 
-        // 🔐 VALIDACIÓN DE SEGURIDAD
         if (password.length < 6) {
           return res.status(400).json({
             message: 'La contraseña debe tener al menos 6 caracteres'
@@ -93,7 +91,9 @@ module.exports = (pool) => {
         } else if (normalizedRole === 'user') {
           normalizedRole = 'OFFICE_USER';
         } else {
-          return res.status(400).json({ message: 'Rol inválido' });
+          return res.status(400).json({
+            message: 'Rol inválido'
+          });
         }
 
         const normalizedName = String(name).trim();
@@ -117,6 +117,50 @@ module.exports = (pool) => {
           });
         }
 
+        /* ======================================================
+           VALIDAR LÍMITE DE USUARIOS SEGÚN PLAN
+           - Cuenta usuarios activos de office_users
+           - Incluye OFFICE_ADMIN y OFFICE_USER
+           - Enterprise/9999 no limita
+        ====================================================== */
+        const [planRows] = await pool.query(
+          `
+          SELECT
+            p.name,
+            p.max_users
+          FROM offices o
+          INNER JOIN plans p
+            ON p.id = o.plan_id
+          WHERE o.id = ?
+          LIMIT 1
+          `,
+          [finalOfficeId]
+        );
+
+        if (planRows.length > 0) {
+          const maxUsers = Number(planRows[0].max_users || 0);
+
+          if (maxUsers > 0 && maxUsers < 9999) {
+            const [userCountRows] = await pool.query(
+              `
+              SELECT COUNT(*) AS total
+              FROM office_users
+              WHERE office_id = ?
+                AND status = 1
+              `,
+              [finalOfficeId]
+            );
+
+            const currentUsers = Number(userCountRows[0]?.total || 0);
+
+            if (currentUsers >= maxUsers) {
+              return res.status(400).json({
+                message: `Su plan ${planRows[0].name} permite un máximo de ${maxUsers} usuario(s).`
+              });
+            }
+          }
+        }
+
         const [exists] = await pool.query(
           `SELECT id
            FROM office_users
@@ -131,7 +175,6 @@ module.exports = (pool) => {
           });
         }
 
-        // 🔥 AQUÍ ESTÁ LO IMPORTANTE: PASSWORD MANUAL
         const password_hash = await bcrypt.hash(password, 10);
 
         const [result] = await pool.query(
@@ -186,7 +229,9 @@ module.exports = (pool) => {
         );
 
         if (!userRows.length) {
-          return res.status(404).json({ message: 'Usuario no encontrado' });
+          return res.status(404).json({
+            message: 'Usuario no encontrado'
+          });
         }
 
         const officeUser = userRows[0];
@@ -208,7 +253,9 @@ module.exports = (pool) => {
         } else if (normalizedRole === 'user') {
           normalizedRole = 'OFFICE_USER';
         } else {
-          return res.status(400).json({ message: 'Rol inválido' });
+          return res.status(400).json({
+            message: 'Rol inválido'
+          });
         }
 
         const normalizedName = String(name).trim();
@@ -238,7 +285,9 @@ module.exports = (pool) => {
           ]
         );
 
-        return res.json({ message: 'Usuario actualizado correctamente' });
+        return res.json({
+          message: 'Usuario actualizado correctamente'
+        });
       } catch (err) {
         console.error('UPDATE OFFICE USER ERROR:', err);
         return res.status(500).json({
@@ -249,64 +298,64 @@ module.exports = (pool) => {
   );
 
   /* ======================================================
-   CAMBIAR ESTADO USUARIO
-====================================================== */
-router.put(
-  '/:id/status',
-  authenticateToken,
-  allowRoles('MASTER', 'OFFICE_ADMIN'),
-  async (req, res) => {
-    try {
-      const { id } = req.params;
-      const { status } = req.body || {};
+     CAMBIAR ESTADO USUARIO
+  ====================================================== */
+  router.put(
+    '/:id/status',
+    authenticateToken,
+    allowRoles('MASTER', 'OFFICE_ADMIN'),
+    async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { status } = req.body || {};
 
-      if (![0, 1].includes(Number(status))) {
-        return res.status(400).json({
-          message: 'Estado inválido'
+        if (![0, 1].includes(Number(status))) {
+          return res.status(400).json({
+            message: 'Estado inválido'
+          });
+        }
+
+        const [userRows] = await pool.query(
+          `SELECT id, office_id FROM office_users WHERE id = ? LIMIT 1`,
+          [id]
+        );
+
+        if (!userRows.length) {
+          return res.status(404).json({
+            message: 'Usuario no encontrado'
+          });
+        }
+
+        const officeUser = userRows[0];
+        const userRole = String(req.user.role || '').trim().toUpperCase();
+
+        if (
+          userRole === 'OFFICE_ADMIN' &&
+          Number(officeUser.office_id) !== Number(req.user.office_id)
+        ) {
+          return res.status(403).json({
+            message: 'No puedes cambiar el estado de este usuario'
+          });
+        }
+
+        await pool.query(
+          `UPDATE office_users
+           SET status = ?, updated_at = NOW()
+           WHERE id = ?`,
+          [Number(status), id]
+        );
+
+        return res.json({
+          message: 'Estado actualizado correctamente'
+        });
+      } catch (err) {
+        console.error('CHANGE OFFICE USER STATUS ERROR:', err);
+        return res.status(500).json({
+          message: 'Error interno al cambiar estado'
         });
       }
-
-      const [userRows] = await pool.query(
-        `SELECT id, office_id FROM office_users WHERE id = ? LIMIT 1`,
-        [id]
-      );
-
-      if (!userRows.length) {
-        return res.status(404).json({
-          message: 'Usuario no encontrado'
-        });
-      }
-
-      const officeUser = userRows[0];
-      const userRole = String(req.user.role || '').trim().toUpperCase();
-
-      if (
-        userRole === 'OFFICE_ADMIN' &&
-        Number(officeUser.office_id) !== Number(req.user.office_id)
-      ) {
-        return res.status(403).json({
-          message: 'No puedes cambiar el estado de este usuario'
-        });
-      }
-
-      await pool.query(
-        `UPDATE office_users
-         SET status = ?, updated_at = NOW()
-         WHERE id = ?`,
-        [Number(status), id]
-      );
-
-      return res.json({
-        message: 'Estado actualizado correctamente'
-      });
-    } catch (err) {
-      console.error('CHANGE OFFICE USER STATUS ERROR:', err);
-      return res.status(500).json({
-        message: 'Error interno al cambiar estado'
-      });
     }
-  }
-);
+  );
 
   return router;
 };

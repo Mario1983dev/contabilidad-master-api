@@ -45,9 +45,15 @@ module.exports = (pool) => {
           FROM companies c
           LEFT JOIN offices o
             ON o.id = c.office_id
-          LEFT JOIN accounting_periods p
-            ON p.company_id = c.id
-           AND p.is_current = 1
+LEFT JOIN (
+  SELECT
+    company_id,
+    MAX(year_num) AS year_num
+  FROM accounting_periods
+  WHERE is_current = 1
+  GROUP BY company_id
+) p
+  ON p.company_id = c.id
         `;
 
         const params = [];
@@ -228,6 +234,46 @@ module.exports = (pool) => {
             .status(400)
             .json({ message: 'La oficina indicada no existe' });
         }
+        const [planRows] = await connection.query(
+  `
+  SELECT
+    p.name,
+    p.max_companies
+  FROM offices o
+  INNER JOIN plans p
+    ON p.id = o.plan_id
+  WHERE o.id = ?
+  `,
+  [finalOfficeId]
+);
+
+if (planRows.length > 0) {
+  const maxCompanies = Number(planRows[0].max_companies || 0);
+
+  if (maxCompanies > 0 && maxCompanies < 9999) {
+
+    const [companyCountRows] = await connection.query(
+      `
+      SELECT COUNT(*) AS total
+      FROM companies
+      WHERE office_id = ?
+        AND status <> 'inactive'
+      `,
+      [finalOfficeId]
+    );
+
+    const currentCompanies =
+      Number(companyCountRows[0]?.total || 0);
+
+    if (currentCompanies >= maxCompanies) {
+      await connection.rollback();
+
+      return res.status(400).json({
+        message: `Su plan ${planRows[0].name} permite un máximo de ${maxCompanies} empresa(s).`
+      });
+    }
+  }
+}
 
         const [existingCompany] = await connection.query(
           `SELECT id FROM companies WHERE office_id = ? AND rut = ?`,
