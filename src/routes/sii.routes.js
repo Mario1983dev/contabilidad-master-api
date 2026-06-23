@@ -194,7 +194,7 @@ router.post('/upload', upload.single('file'), (req, res) => {
       message: 'CSV leído correctamente',
       bookType,
       totalRows: rows.length,
-      preview: rows.slice(0, 20),
+      preview: rows,
       file: req.file.originalname
     });
   } catch (error) {
@@ -240,11 +240,50 @@ router.post('/import', async (req, res) => {
 
     const periodo = getPeriodoFromFileName(fileName);
 
+    if (!periodo) {
+      return res.status(400).json({
+        message: 'No se pudo determinar el período desde el nombre del archivo'
+      });
+    }
+
     const tipoLibroDb = bookType === 'COMPRAS'
       ? 'COMPRA'
       : 'VENTA';
 
     await connection.beginTransaction();
+
+    const [existingBooks] = await connection.query(
+      `
+      SELECT id
+      FROM libro_cv
+      WHERE company_id = ?
+        AND periodo = ?
+        AND tipo_libro = ?
+      LIMIT 1
+      `,
+      [
+        Number(company_id),
+        periodo,
+        tipoLibroDb
+      ]
+    );
+
+    if (existingBooks.length > 0) {
+      await connection.rollback();
+
+      return res.status(400).json({
+        message: `El libro ${tipoLibroDb} del período ${periodo} ya fue importado.`,
+        duplicated: true,
+        existingLibroCvId: existingBooks[0].id,
+        company_id: Number(company_id),
+        periodo,
+        tipoLibroDb,
+        totalRows: Number(totalRows || rows.length),
+        importedRows: 0,
+        duplicatedRows: rows.length,
+        errorRows: 0
+      });
+    }
 
     const [libroResult] = await connection.query(
       `
@@ -266,38 +305,84 @@ router.post('/import', async (req, res) => {
 
     const libroCvId = libroResult.insertId;
 
-    for (const row of rows) {
-      const detalle = mapDetalleRow(row);
+    let importedRows = 0;
+    let errorRows = 0;
+    const errors = [];
 
-      await connection.query(
-        `
-        INSERT INTO libro_cv_detalle (
-          libro_cv_id,
-          tipo_documento,
-          total_documentos,
-          monto_exento,
-          monto_neto,
-          iva_recuperable,
-          iva_uso_comun,
-          iva_no_recuperable,
-          monto_iva,
-          monto_total
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `,
-        [
-          libroCvId,
-          detalle.tipo_documento,
-          detalle.total_documentos,
-          detalle.monto_exento,
-          detalle.monto_neto,
-          detalle.iva_recuperable,
-          detalle.iva_uso_comun,
-          detalle.iva_no_recuperable,
-          detalle.monto_iva,
-          detalle.monto_total
-        ]
-      );
+    for (let index = 0; index < rows.length; index++) {
+      try {
+        const row = rows[index];
+        const detalle = mapDetalleRow(row);
+
+        if (!detalle.tipo_documento) {
+          errorRows++;
+          errors.push({
+            row: index + 1,
+            message: 'Fila sin tipo de documento'
+          });
+          continue;
+        }
+
+        if (
+          detalle.total_documentos < 0 ||
+          detalle.monto_exento < 0 ||
+          detalle.monto_neto < 0 ||
+          detalle.iva_recuperable < 0 ||
+          detalle.iva_uso_comun < 0 ||
+          detalle.iva_no_recuperable < 0 ||
+          detalle.monto_iva < 0 ||
+          detalle.monto_total < 0
+        ) {
+          errorRows++;
+          errors.push({
+            row: index + 1,
+            tipo_documento: detalle.tipo_documento,
+            message: 'Fila con montos negativos'
+          });
+          continue;
+        }
+
+        await connection.query(
+          `
+          INSERT INTO libro_cv_detalle (
+            libro_cv_id,
+            tipo_documento,
+            total_documentos,
+            monto_exento,
+            monto_neto,
+            iva_recuperable,
+            iva_uso_comun,
+            iva_no_recuperable,
+            monto_iva,
+            monto_total
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `,
+          [
+            libroCvId,
+            detalle.tipo_documento,
+            detalle.total_documentos,
+            detalle.monto_exento,
+            detalle.monto_neto,
+            detalle.iva_recuperable,
+            detalle.iva_uso_comun,
+            detalle.iva_no_recuperable,
+            detalle.monto_iva,
+            detalle.monto_total
+          ]
+        );
+
+        importedRows++;
+      } catch (rowError) {
+        errorRows++;
+
+        errors.push({
+          row: index + 1,
+          message: 'Error al insertar fila'
+        });
+
+        console.error('SII IMPORT ROW ERROR:', rowError);
+      }
     }
 
     await connection.commit();
@@ -311,7 +396,10 @@ router.post('/import', async (req, res) => {
       tipoLibroDb,
       fileName,
       totalRows: Number(totalRows || rows.length),
-      importedRows: rows.length
+      importedRows,
+      duplicatedRows: 0,
+      errorRows,
+      errors
     });
   } catch (error) {
     await connection.rollback();
@@ -320,196 +408,6 @@ router.post('/import', async (req, res) => {
 
     return res.status(500).json({
       message: 'Error al importar libro SII'
-    });
-  } finally {
-    connection.release();
-  }
-});
-router.post('/generate-entries/:libroCvId', async (req, res) => {
-  const connection = await pool.getConnection();
-
-  try {
-    const libroCvId = Number(req.params.libroCvId);
-
-    if (!libroCvId) {
-      return res.status(400).json({
-        message: 'Libro CV inválido'
-      });
-    }
-
-    const [libroRows] = await connection.query(
-      `
-      SELECT *
-      FROM libro_cv
-      WHERE id = ?
-      `,
-      [libroCvId]
-    );
-
-    if (!libroRows.length) {
-      return res.status(404).json({
-        message: 'Libro CV no encontrado'
-      });
-    }
-
-    const libro = libroRows[0];
-
-    const [detalleRows] = await connection.query(
-      `
-      SELECT *
-      FROM libro_cv_detalle
-      WHERE libro_cv_id = ?
-      `,
-      [libroCvId]
-    );
-
-    if (!detalleRows.length) {
-      return res.status(400).json({
-        message: 'El libro no tiene detalles'
-      });
-    }
-
-    const [mappingRows] = await connection.query(
-      `
-      SELECT
-        am.mapping_key,
-        am.account_id,
-        ca.name AS account_name
-      FROM account_mappings am
-      INNER JOIN company_accounts ca
-        ON ca.id = am.account_id
-      WHERE am.company_id = ?
-      `,
-      [libro.company_id]
-    );
-
-    const mappings = {};
-
-    for (const row of mappingRows) {
-      mappings[row.mapping_key] = row;
-    }
-
-    if (
-      !mappings.COMPRAS ||
-      !mappings.IVA_CREDITO ||
-      !mappings.PROVEEDORES
-    ) {
-      return res.status(400).json({
-        message: 'Faltan mappings contables'
-      });
-    }
-
-    let totalNeto = 0;
-    let totalIva = 0;
-    let totalGeneral = 0;
-
-    for (const row of detalleRows) {
-      totalNeto += Number(row.monto_neto || 0);
-      totalIva += Number(row.monto_iva || 0);
-      totalGeneral += Number(row.monto_total || 0);
-    }
-
-    await connection.beginTransaction();
-
-    const [journalResult] = await connection.query(
-      `
-      INSERT INTO journal_entries (
-        company_id,
-        entry_date,
-        entry_type,
-        description,
-        status
-      )
-      VALUES (?, CURDATE(), ?, ?, ?)
-      `,
-      [
-        libro.company_id,
-        'MANUAL',
-        `Asiento automático libro compras ${libro.archivo_nombre}`,
-        1
-      ]
-    );
-
-    const entryId = journalResult.insertId;
-
-    await connection.query(
-      `
-      INSERT INTO journal_entry_lines (
-        entry_id,
-        account_id,
-        description,
-        debit,
-        credit
-      )
-      VALUES (?, ?, ?, ?, ?)
-      `,
-      [
-        entryId,
-        mappings.COMPRAS.account_id,
-        'Compras mercadería',
-        totalNeto,
-        0
-      ]
-    );
-
-    await connection.query(
-      `
-      INSERT INTO journal_entry_lines (
-        entry_id,
-        account_id,
-        description,
-        debit,
-        credit
-      )
-      VALUES (?, ?, ?, ?, ?)
-      `,
-      [
-        entryId,
-        mappings.IVA_CREDITO.account_id,
-        'IVA crédito fiscal',
-        totalIva,
-        0
-      ]
-    );
-
-    await connection.query(
-      `
-      INSERT INTO journal_entry_lines (
-        entry_id,
-        account_id,
-        description,
-        debit,
-        credit
-      )
-      VALUES (?, ?, ?, ?, ?)
-      `,
-      [
-        entryId,
-        mappings.PROVEEDORES.account_id,
-        'Cuentas por pagar',
-        0,
-        totalGeneral
-      ]
-    );
-
-    await connection.commit();
-
-    return res.json({
-      message: 'Asiento generado correctamente',
-      entryId,
-      totals: {
-        neto: totalNeto,
-        iva: totalIva,
-        total: totalGeneral
-      }
-    });
-  } catch (error) {
-    await connection.rollback();
-
-    console.error('GENERATE ENTRIES ERROR:', error);
-
-    return res.status(500).json({
-      message: 'Error al generar asiento automático'
     });
   } finally {
     connection.release();

@@ -20,6 +20,7 @@ const accountingPeriodsRoutes = require('./routes/accounting-periods.routes');
 const subscriptionsRoutes = require('./routes/subscriptions.routes');
 
 const { authenticateToken, allowRoles } = require('./middlewares/auth.middleware');
+const librosCvRoutes = require('./routes/libros-cv.routes');
 
 const pool = require('./db');
 
@@ -30,7 +31,7 @@ app.set('etag', false);
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
+app.use('/api/libros-cv', librosCvRoutes);
 app.use('/api/sii', siiRoutes);
 
 app.use('/api/export', exportRoutes(pool, authenticateToken, allowRoles));
